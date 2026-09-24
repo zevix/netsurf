@@ -17,6 +17,20 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * box_pick_text_box() tolerates a content with no box tree, which is
+ * what a content looks like while its tree is being rebuilt.
+ *
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
+ * GPL-2.0, same as NetSurf.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  * implementation of box tree inspection.
@@ -859,7 +873,7 @@ box_pick_text_box(struct html_content *html,
 	int fx, fy;
 	int tx, ty;
 
-	if (html == NULL)
+	if (html == NULL || html->layout == NULL)
 		return NULL;
 
 	box = html->layout;

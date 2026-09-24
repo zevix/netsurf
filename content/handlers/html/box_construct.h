@@ -16,6 +16,19 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * declared dom_to_box_sync().
+ *
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
+ * GPL-2.0, same as NetSurf.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  * HTML Box tree construction interface.
@@ -82,6 +95,20 @@
  * \return netsurf error code indicating status of call
  */
 nserror dom_to_box(struct dom_node *n, struct html_content *c, box_construct_complete_cb cb, void **box_conversion_context);
+
+/**
+ * Construct a box tree from a dom in one go, without returning to the
+ * scheduler (VitaSurf). Used to rebuild the layout after scripts changed
+ * the document: the content is without a box tree until it finishes, and
+ * a great deal of NetSurf assumes a content that is not still loading
+ * has one. The callback runs before this returns.
+ *
+ * \param n  root dom node to make boxes from
+ * \param c  content of the html document
+ * \param cb callback to invoke on completion
+ * \return NSERROR_OK on success or error code on failure
+ */
+nserror dom_to_box_sync(struct dom_node *n, struct html_content *c, box_construct_complete_cb cb);
 
 
 /**

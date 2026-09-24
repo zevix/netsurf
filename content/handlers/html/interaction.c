@@ -19,6 +19,20 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * get_mouse_action_node() reports nothing under the pointer while the
+ * box tree is being rebuilt, rather than dereferencing a gone tree.
+ *
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
+ * GPL-2.0, same as NetSurf.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  * implementation of user interaction with a CONTENT_HTML.
@@ -681,6 +695,13 @@ get_mouse_action_node(html_content *html,
 
 	/* initialise the mouse action state data */
 	memset(man, 0, sizeof(struct mouse_action_state));
+
+	if (html->layout == NULL) {
+		/* the box tree is being rebuilt from a script-modified
+		 * document; there is nothing under the pointer (VitaSurf) */
+		return NSERROR_INVALID;
+	}
+
 	man->node = html->layout->node; /* Default dom node to the <HTML> */
 	man->result.pointer = BROWSER_POINTER_DEFAULT;
 

@@ -17,6 +17,27 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * html_relayout(), which tears the box tree of an already-converted
+ * content down and rebuilds it from the current DOM; html_reformat()
+ * and the forms-from-DOM half of html_begin_conversion() were split or
+ * guarded for it.  The rebuild is gated on the nsoption
+ * enable_dynamic_relayout (netsurf_upy), and html_finish_conversion()
+ * starts the stylesheet fetches nsoption defer_author_stylesheets held
+ * back (netsurf_upy).
+ *
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0110-netsurf-rebuild-root-style.patch, by Breezyslasher.
+ * GPL-2.0, same as NetSurf.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  * Implementation of HTML content handling.
@@ -50,6 +71,7 @@
 #include "content/hlcache.h"
 #include "content/content_factory.h"
 #include "content/textsearch.h"
+#include "desktop/frames.h"
 #include "desktop/selection.h"
 #include "desktop/scrollbar.h"
 #include "desktop/textarea.h"
@@ -60,6 +82,7 @@
 #include "html/html.h"
 #include "html/private.h"
 #include "html/dom_event.h"
+#include "css/select.h"
 #include "html/css.h"
 #include "html/object.h"
 #include "html/html_save.h"
@@ -412,6 +435,11 @@ void html_finish_conversion(html_content *htmlc)
 	}
 
 	dom_node_unref(html);
+
+	/* netsurf_upy: any <link> stylesheet the option held back is
+	 * fetched from here on, so it arrives after this conversion and
+	 * takes the rebuild path in html_convert_css_callback(). */
+	html_css_start_deferred_links(htmlc);
 }
 
 
@@ -829,12 +857,70 @@ bool html_can_begin_conversion(html_content *htmlc)
 	return true;
 }
 
+/**
+ * Retrieve the forms from the document and make their actions absolute.
+ *
+ * \param htmlc html content
+ * \return true on success, false on error (already broadcast)
+ */
+static bool html_forms_from_dom(html_content *htmlc)
+{
+	struct form *f;
+	nserror ns_error;
+
+	htmlc->forms = html_forms_get_forms(htmlc->encoding,
+			(dom_html_document *) htmlc->document);
+	for (f = htmlc->forms; f != NULL; f = f->prev) {
+		nsurl *action;
+
+		/* Make all actions absolute */
+		if (f->action == NULL || f->action[0] == '\0') {
+			/* HTML5 4.10.22.3 step 9 */
+			nsurl *doc_addr = content_get_url(&htmlc->base);
+			ns_error = nsurl_join(htmlc->base_url,
+					      nsurl_access(doc_addr),
+					      &action);
+		} else {
+			ns_error = nsurl_join(htmlc->base_url,
+					      f->action,
+					      &action);
+		}
+
+		if (ns_error != NSERROR_OK) {
+			content_broadcast_error(&htmlc->base, ns_error, NULL);
+			return false;
+		}
+
+		free(f->action);
+		f->action = strdup(nsurl_access(action));
+		nsurl_unref(action);
+		if (f->action == NULL) {
+			content_broadcast_error(&htmlc->base,
+						NSERROR_NOMEM,
+						NULL);
+			return false;
+		}
+
+		/* Ensure each form has a document encoding */
+		if (f->document_charset == NULL) {
+			f->document_charset = strdup(htmlc->encoding);
+			if (f->document_charset == NULL) {
+				content_broadcast_error(&htmlc->base,
+							NSERROR_NOMEM,
+							NULL);
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+
 bool
 html_begin_conversion(html_content *htmlc)
 {
 	dom_node *html;
-	nserror ns_error;
-	struct form *f;
 	dom_exception exc; /* returned by libdom functions */
 	dom_string *node_name = NULL;
 	dom_hubbub_error error;
@@ -941,54 +1027,9 @@ html_begin_conversion(html_content *htmlc)
 	dom_string_unref(node_name);
 
 	/* Retrieve forms from parser */
-	htmlc->forms = html_forms_get_forms(htmlc->encoding,
-			(dom_html_document *) htmlc->document);
-	for (f = htmlc->forms; f != NULL; f = f->prev) {
-		nsurl *action;
-
-		/* Make all actions absolute */
-		if (f->action == NULL || f->action[0] == '\0') {
-			/* HTML5 4.10.22.3 step 9 */
-			nsurl *doc_addr = content_get_url(&htmlc->base);
-			ns_error = nsurl_join(htmlc->base_url,
-					      nsurl_access(doc_addr),
-					      &action);
-		} else {
-			ns_error = nsurl_join(htmlc->base_url,
-					      f->action,
-					      &action);
-		}
-
-		if (ns_error != NSERROR_OK) {
-			content_broadcast_error(&htmlc->base, ns_error, NULL);
-
-			dom_node_unref(html);
-			return false;
-		}
-
-		free(f->action);
-		f->action = strdup(nsurl_access(action));
-		nsurl_unref(action);
-		if (f->action == NULL) {
-			content_broadcast_error(&htmlc->base,
-						NSERROR_NOMEM,
-						NULL);
-
-			dom_node_unref(html);
-			return false;
-		}
-
-		/* Ensure each form has a document encoding */
-		if (f->document_charset == NULL) {
-			f->document_charset = strdup(htmlc->encoding);
-			if (f->document_charset == NULL) {
-				content_broadcast_error(&htmlc->base,
-							NSERROR_NOMEM,
-							NULL);
-				dom_node_unref(html);
-				return false;
-			}
-		}
+	if (html_forms_from_dom(htmlc) == false) {
+		dom_node_unref(html);
+		return false;
 	}
 
 	dom_node_unref(html);
@@ -1058,6 +1099,13 @@ static void html_reformat(struct content *c, int width, int height)
 	uint64_t ms_after;
 	uint64_t ms_interval;
 
+	if (htmlc->layout == NULL) {
+		/* A rebuild from a script-modified document is in flight
+		 * and the old tree is gone; the rebuild lays out when it
+		 * finishes (VitaSurf). */
+		return;
+	}
+
 	nsu_getmonotonic_ms(&ms_before);
 
 	htmlc->reflowing = true;
@@ -1098,6 +1146,189 @@ static void html_reformat(struct content *c, int width, int height)
 		ms_interval = nsoption_uint(min_reflow_period) * 10;
 	}
 	c->reformat_time = ms_after + ms_interval;
+}
+
+
+/**
+ * Forget the boxes and cached styles the last conversion attached to the
+ * DOM nodes (VitaSurf). A node that gets no box this time round (display:
+ * none now) would otherwise keep a dangling pointer for box_for_node(),
+ * and libcss will not select a style for a node that still carries one.
+ */
+static void html_clear_node_boxes(dom_node *root)
+{
+	dom_node *n = dom_node_ref(root);
+
+	while (n != NULL) {
+		dom_node *next = NULL;
+		void *old = NULL;
+
+		dom_node_set_user_data(n, corestring_dom___ns_key_box_node_data,
+				NULL, NULL, &old);
+		nscss_clear_node_data(n);
+
+		if (dom_node_get_first_child(n, &next) != DOM_NO_ERR) {
+			next = NULL;
+		}
+		if (next == NULL) {
+			/* climb until a next sibling exists, stop at root */
+			dom_node *cur = dom_node_ref(n);
+
+			while (cur != NULL) {
+				dom_node *sib = NULL, *parent = NULL;
+
+				if (cur == root) {
+					dom_node_unref(cur);
+					break;
+				}
+				if (dom_node_get_next_sibling(cur, &sib) == DOM_NO_ERR &&
+						sib != NULL) {
+					next = sib;
+					dom_node_unref(cur);
+					break;
+				}
+				if (dom_node_get_parent_node(cur, &parent) != DOM_NO_ERR) {
+					parent = NULL;
+				}
+				dom_node_unref(cur);
+				cur = parent;
+			}
+		}
+		dom_node_unref(n);
+		n = next;
+	}
+}
+
+
+/**
+ * Second half of html_relayout(): lay the new box tree out (VitaSurf).
+ */
+static void html_relayout_done(html_content *c, bool success)
+{
+	if (success == false || c->layout == NULL) {
+		NSLOG(netsurf, ERROR, "box tree rebuild failed (content %p)", c);
+		content_broadcast_error(&c->base, NSERROR_BOX_CONVERT, NULL);
+		content_set_error(&c->base);
+		return;
+	}
+
+	if (imagemap_extract(c) != NSERROR_OK) {
+		NSLOG(netsurf, WARNING, "imagemap extraction failed");
+	}
+
+	content__reformat(&c->base, false,
+			  c->base.available_width, c->base.available_height);
+
+	/* the iframe boxes the window knew about went with the old tree */
+	if (c->bw != NULL && c->page == NULL) {
+		browser_window_create_iframes(c->bw);
+	}
+}
+
+
+/* exported interface documented in html/private.h */
+nserror html_relayout(html_content *htmlc)
+{
+	dom_node *html = NULL;
+	dom_exception exc;
+	struct form *f, *g;
+	struct content_html_object *old_objects;
+	nserror err;
+
+	if (nsoption_bool(enable_dynamic_relayout) == false) {
+		/*
+		 * netsurf_upy: the mechanism is off unless it is asked
+		 * for, so a build carrying it behaves exactly as one
+		 * without it.
+		 */
+		return NSERROR_NOT_IMPLEMENTED;
+	}
+
+	if (htmlc->layout == NULL || htmlc->bctx == NULL ||
+	    htmlc->box_conversion_context != NULL ||
+	    htmlc->reflowing || htmlc->base.locked ||
+	    htmlc->had_initial_layout == false ||
+	    htmlc->frameset != NULL ||
+	    htmlc->drag_type != HTML_DRAG_NONE ||
+	    htmlc->focus_type == HTML_FOCUS_TEXTAREA ||
+	    htmlc->base.textsearch.context != NULL ||
+	    (htmlc->base.status != CONTENT_STATUS_READY &&
+	     htmlc->base.status != CONTENT_STATUS_DONE)) {
+		/* Still being built, busy with the user, or something
+		 * outside holds pointers into the box tree. Try later. */
+		return NSERROR_INVALID;
+	}
+
+	exc = dom_document_get_document_element(htmlc->document, (void *) &html);
+	if ((exc != DOM_NO_ERR) || (html == NULL)) {
+		return NSERROR_DOM;
+	}
+
+	NSLOG(netsurf, INFO, "rebuilding layout (content %p)", htmlc);
+
+	/* input state that points into the old box tree */
+	htmlc->drag_type = HTML_DRAG_NONE;
+	htmlc->drag_owner.no_owner = true;
+	htmlc->selection_type = HTML_SELECTION_NONE;
+	htmlc->selection_owner.none = true;
+	htmlc->focus_type = HTML_FOCUS_SELF;
+	htmlc->focus_owner.self = true;
+	htmlc->visible_select_menu = NULL;
+	if (htmlc->sel != NULL) {
+		selection_clear(htmlc->sel, false);
+	}
+
+	/*
+	 * Set the objects aside rather than releasing them. The new tree
+	 * asks for the same images, and dropping the last user of each
+	 * first lets them fall out of the cache, so every one is fetched
+	 * and decoded again. Holding them until the new tree has asked
+	 * keeps them in the cache and the new requests are satisfied from
+	 * it (VitaSurf).
+	 */
+	old_objects = htmlc->object_list;
+	htmlc->object_list = NULL;
+	htmlc->num_objects = 0;
+
+	for (f = htmlc->forms; f != NULL; f = g) {
+		g = f->prev;
+		form_free(f);
+	}
+	htmlc->forms = NULL;
+
+	imagemap_destroy(htmlc);
+	htmlc->imagemaps = NULL;
+
+	/* child windows point at iframe boxes in the tree about to go */
+	if (htmlc->bw != NULL && htmlc->page == NULL) {
+		browser_window_destroy_iframes(htmlc->bw);
+	}
+
+	html_clear_node_boxes(html);
+
+	/* iframes and framesets live in the box tree's talloc context */
+	talloc_free(htmlc->bctx);
+	htmlc->bctx = NULL;
+	htmlc->layout = NULL;
+	/* the root style went with it; the new root sets it again */
+	htmlc->unit_len_ctx.root_style = NULL;
+	htmlc->iframe = NULL;
+
+	if (html_forms_from_dom(htmlc) == false) {
+		dom_node_unref(html);
+		return NSERROR_NOMEM;
+	}
+
+	/* Run to completion here rather than yielding: the content has no
+	 * box tree until this finishes, and redraw, hit testing and the
+	 * rest of NetSurf take one for granted on a loaded page. */
+	err = dom_to_box_sync(html, htmlc, html_relayout_done);
+	dom_node_unref(html);
+
+	/* the new tree now holds its own references, so let these go */
+	html_object_free_list(htmlc, old_objects);
+
+	return err;
 }
 
 

@@ -16,6 +16,23 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * html_css_late_rebuild(), the core, engine-free caller that rebuilds
+ * the selection context and calls html_relayout() when a stylesheet
+ * arrives after conversion, and the deferred-<link> machinery
+ * (netsurf_upy) that makes one arrive late with no scripting engine in
+ * the build.
+ *
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0105-netsurf-late-stylesheets.patch, by Breezyslasher.
+ * GPL-2.0, same as NetSurf.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  * Processing for html content css operations.
@@ -87,6 +104,104 @@ static nserror css_error_to_nserror(css_error error)
 
 
 /**
+ * A <link> stylesheet whose fetch has not been started yet (netsurf_upy).
+ *
+ * Only `nsoption defer_author_stylesheets` makes one of these; see
+ * html_css_process_link().
+ */
+struct html_deferred_link {
+	dom_node *node;
+	struct html_deferred_link *next;
+};
+
+
+static bool html_css_link_fetch(html_content *htmlc, dom_node *node);
+
+
+/**
+ * Rebuild the selection context and the boxes after a stylesheet that
+ * arrived once the page was already converted (VitaSurf).
+ *
+ * This is the **non-script caller** of html_relayout(): it is core code,
+ * it mentions no engine, and it is what proves the rebuild works without
+ * one.
+ */
+static void html_css_late_rebuild(void *pw)
+{
+	html_content *c = pw;
+	css_select_ctx *fresh = NULL;
+	nserror err;
+
+	if (c->select_ctx == NULL || c->aborted) {
+		return;
+	}
+	/* other late sheets still arriving: the last one's arrival
+	 * schedules this again, so one rebuild serves them all */
+	if (c->base.active != 0) {
+		return;
+	}
+	/* a box conversion in progress reads the context it started with */
+	if (c->box_conversion_context != NULL) {
+		if (c->late_css_retries++ < 30) {
+			guit->misc->schedule(100, html_css_late_rebuild, c);
+		}
+		return;
+	}
+	if (html_css_new_selection_context(c, &fresh) != NSERROR_OK) {
+		return;
+	}
+	css_select_ctx_destroy(c->select_ctx);
+	c->select_ctx = fresh;
+
+	err = html_relayout(c);
+	if (err == NSERROR_INVALID && c->late_css_retries++ < 30) {
+		/* busy with the user or still being built: try again */
+		guit->misc->schedule(100, html_css_late_rebuild, c);
+	}
+}
+
+
+/**
+ * Start the <link> stylesheet fetches held back past conversion
+ * (netsurf_upy).
+ */
+static void html_css_deferred_links_cb(void *pw)
+{
+	html_content *c = pw;
+
+	while (c->deferred_links != NULL) {
+		struct html_deferred_link *link = c->deferred_links;
+
+		c->deferred_links = link->next;
+
+		html_css_link_fetch(c, link->node);
+		dom_node_unref(link->node);
+		free(link);
+	}
+}
+
+
+/* exported function documented in html/css.h */
+nserror html_css_start_deferred_links(html_content *c)
+{
+	if (c->deferred_links == NULL) {
+		return NSERROR_OK;
+	}
+
+	/*
+	 * Not here and now: html_finish_conversion() has only *started*
+	 * the box conversion, which yields through the scheduler.  The
+	 * rebuild that each of these will ask for waits for the box tree
+	 * anyway (html_css_late_rebuild() retries while
+	 * box_conversion_context is set).
+	 */
+	guit->misc->schedule(0, html_css_deferred_links_cb, c);
+
+	return NSERROR_OK;
+}
+
+
+/**
  * Callback for fetchcache() for stylesheets.
  */
 static nserror
@@ -136,7 +251,21 @@ html_convert_css_callback(hlcache_handle *css,
 		break;
 	}
 
-	if (html_can_begin_conversion(parent)) {
+	if (parent->select_ctx != NULL) {
+		/*
+		 * The page was styled and laid out already, so this sheet
+		 * arrived late (VitaSurf).  Upstream drops it on the floor
+		 * in html_finish_conversion() -- "Ignoring style change: NS
+		 * layout is static." -- which is the gap this branch
+		 * closes: the selection context is rebuilt from the sheet
+		 * list and the boxes with it.
+		 */
+		if (event->type == CONTENT_MSG_DONE ||
+		    event->type == CONTENT_MSG_ERROR) {
+			parent->late_css_retries = 0;
+			guit->misc->schedule(0, html_css_late_rebuild, parent);
+		}
+	} else if (html_can_begin_conversion(parent)) {
 		html_begin_conversion(parent);
 	}
 
@@ -384,6 +513,48 @@ bool html_css_process_style(html_content *c, dom_node *node)
 /* exported function documented in html/css.h */
 bool html_css_process_link(html_content *htmlc, dom_node *node)
 {
+	struct html_deferred_link *link;
+
+	if (nsoption_bool(defer_author_stylesheets) &&
+	    htmlc->select_ctx == NULL) {
+		/*
+		 * netsurf_upy: hold the fetch back until the document has
+		 * been converted, so the sheet arrives *late* and takes
+		 * the same path a script-added one would.  Nothing else in
+		 * NetSurf can deliver a stylesheet after conversion --
+		 * every fetch is counted in base.active and
+		 * html_can_begin_conversion() waits for all of them -- so
+		 * without this the late path above is unreachable in a
+		 * build with no scripting engine.
+		 * TEMPORARY(until a DOM-mutating driver provides the late
+		 * change instead).
+		 */
+		link = malloc(sizeof(*link));
+		if (link == NULL) {
+			content_broadcast_error(&htmlc->base, NSERROR_NOMEM,
+						NULL);
+			return false;
+		}
+		link->node = dom_node_ref(node);
+		link->next = htmlc->deferred_links;
+		htmlc->deferred_links = link;
+
+		NSLOG(netsurf, INFO, "deferring linked stylesheet (%p)",
+		      htmlc);
+
+		return true;
+	}
+
+	return html_css_link_fetch(htmlc, node);
+}
+
+
+/**
+ * Start the fetch of one <link> stylesheet: html_css_process_link()'s
+ * body, split out so a deferred link can be fetched later (netsurf_upy).
+ */
+static bool html_css_link_fetch(html_content *htmlc, dom_node *node)
+{
 	dom_string *rel, *type_attr, *media, *href;
 	struct html_stylesheet *stylesheets;
 	nsurl *joined;
@@ -533,6 +704,17 @@ nserror html_css_free_stylesheets(html_content *html)
 	unsigned int i;
 
 	guit->misc->schedule(-1, html_css_process_modified_styles, html);
+	/* netsurf_upy: and the two this branch schedules */
+	guit->misc->schedule(-1, html_css_late_rebuild, html);
+	guit->misc->schedule(-1, html_css_deferred_links_cb, html);
+
+	while (html->deferred_links != NULL) {
+		struct html_deferred_link *link = html->deferred_links;
+
+		html->deferred_links = link->next;
+		dom_node_unref(link->node);
+		free(link);
+	}
 
 	for (i = 0; i != html->stylesheet_count; i++) {
 		if (html->stylesheets[i].sheet != NULL) {

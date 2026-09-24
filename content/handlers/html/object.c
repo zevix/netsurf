@@ -16,6 +16,24 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * html_object_free_list(), which releases the object list a rebuild set
+ * aside, and the two reformat paths check for a content with no box
+ * tree.  The html_object_done() call in the first of those is this
+ * tree's three-argument form, not VitaSurf's four-argument one (their
+ * 0013-netsurf-mask-image.patch, which this fork does not take): the
+ * only hunk of 0022 that did not apply.
+ *
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
+ * GPL-2.0, same as NetSurf.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  * Processing for html content object operations.
@@ -185,8 +203,9 @@ html_object_callback(hlcache_handle *object,
 
 			/* Adjust parent content for new object size */
 			html_object_done(box, object, o->background);
-			if (c->base.status == CONTENT_STATUS_READY ||
-					c->base.status == CONTENT_STATUS_DONE)
+			if (c->layout != NULL &&
+					(c->base.status == CONTENT_STATUS_READY ||
+					c->base.status == CONTENT_STATUS_DONE))
 				content__reformat(&c->base, false,
 						c->base.available_width,
 						c->base.available_height);
@@ -203,7 +222,8 @@ html_object_callback(hlcache_handle *object,
 				box->flags & REPLACE_DIM) {
 			union content_msg_data data;
 
-			if (c->had_initial_layout == false) {
+			if (c->had_initial_layout == false ||
+					c->layout == NULL) {
 				break;
 			}
 
@@ -679,6 +699,35 @@ nserror html_object_close_objects(html_content *html)
 
 		content_close(object->content);
 	}
+	return NSERROR_OK;
+}
+
+
+/* exported interface documented in html/object.h */
+nserror html_object_free_list(html_content *html,
+			      struct content_html_object *objects)
+{
+	while (objects != NULL) {
+		struct content_html_object *victim = objects;
+
+		objects = victim->next;
+
+		if (victim->content != NULL) {
+			if (content_get_type(victim->content) == CONTENT_HTML) {
+				guit->misc->schedule(-1, html_object_refresh,
+						     victim);
+			}
+			if (content_get_status(victim->content) !=
+					CONTENT_STATUS_DONE &&
+			    html->base.active > 0) {
+				/* no callback will arrive for it now */
+				html->base.active--;
+			}
+			hlcache_handle_release(victim->content);
+		}
+		free(victim);
+	}
+
 	return NSERROR_OK;
 }
 

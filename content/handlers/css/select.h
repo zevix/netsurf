@@ -16,6 +16,19 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * declared nscss_clear_node_data().
+ *
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
+ * GPL-2.0, same as NetSurf.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 #ifndef NETSURF_CSS_SELECT_H_
 #define NETSURF_CSS_SELECT_H_
 
@@ -58,5 +71,16 @@ css_error named_ancestor_node(void *pw, void *node,
 		const css_qname *qname, void **ancestor);
 
 css_error node_is_visited(void *pw, void *node, bool *match);
+
+/**
+ * Drop the selection data libcss cached on a DOM node (VitaSurf).
+ *
+ * Styles are selected once per node when the box tree is built; before a
+ * rebuild from a script-modified document every node's cache must go, as
+ * css_select_style() refuses to overwrite it.
+ *
+ * \param n the node to clear
+ */
+void nscss_clear_node_data(dom_node *n);
 
 #endif

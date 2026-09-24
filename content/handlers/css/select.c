@@ -16,6 +16,20 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * nscss_clear_node_data(), which drops the selection data libcss caches
+ * on a DOM node so a rebuilt box tree can select styles again.
+ *
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
+ * GPL-2.0, same as NetSurf.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 #include <assert.h>
 #include <string.h>
 #include <strings.h>
@@ -1727,6 +1741,18 @@ css_error ua_default_for_property(void *pw, uint32_t property, css_hint *hint)
 	}
 
 	return CSS_OK;
+}
+
+/* exported interface documented in css/select.h */
+void nscss_clear_node_data(dom_node *n)
+{
+	void *old = NULL;
+
+	if (dom_node_set_user_data(n, corestring_dom___ns_key_libcss_node_data,
+			NULL, NULL, &old) == DOM_NO_ERR && old != NULL) {
+		css_libcss_node_data_handler(&selection_handler,
+				CSS_NODE_DELETED, NULL, n, NULL, old);
+	}
 }
 
 css_error set_libcss_node_data(void *pw, void *node, void *libcss_node_data)

@@ -16,6 +16,15 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * declared html_css_start_deferred_links() (netsurf_upy).
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  * HTML content handler CSS interface.
@@ -52,6 +61,20 @@ nserror html_css_new_selection_context(struct html_content *c, css_select_ctx **
  * \return NSERROR_OK on success or error code
  */
 nserror html_css_new_stylesheets(struct html_content *c);
+
+/**
+ * Start the <link> stylesheet fetches held back past conversion
+ * (netsurf_upy, nsoption defer_author_stylesheets).
+ *
+ * Called once the document has been converted.  Each sheet then arrives
+ * *late* and goes through the rebuild in html_convert_css_callback(),
+ * which is how html_relayout() is reached with no scripting engine in
+ * the build.  A no-op unless the option deferred something.
+ *
+ * \param c content structure to update
+ * \return NSERROR_OK
+ */
+nserror html_css_start_deferred_links(struct html_content *c);
 
 /**
  * Initialise quirk stylesheets for a content

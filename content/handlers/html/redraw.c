@@ -22,6 +22,20 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * html_redraw() paints the background rather than asserting when the
+ * content has no box tree, which it has not while one is rebuilt.
+ *
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
+ * GPL-2.0, same as NetSurf.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  *
@@ -1954,7 +1968,15 @@ bool html_redraw(struct content *c, struct content_redraw_data *data,
 	};
 
 	box = html->layout;
-	assert(box);
+	if (box == NULL) {
+		/* No box tree: a rebuild from a script-modified document is
+		 * in flight. Paint the background and wait for it; the
+		 * rebuild redraws when it finishes (VitaSurf). */
+		if (data->background_colour != NS_TRANSPARENT) {
+			ctx->plot->rectangle(ctx, &pstyle_fill_bg, clip);
+		}
+		return true;
+	}
 
 	/* The select menu needs special treating because, when opened, it
 	 * reaches beyond its layout box.

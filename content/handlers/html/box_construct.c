@@ -20,6 +20,23 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * dom_to_box_sync(), a box construction that runs to completion instead
+ * of yielding through the scheduler, and the root style of the tree
+ * being built is published to the content's unit context as it is made.
+ *
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0110-netsurf-rebuild-root-style.patch, by Breezyslasher.
+ * GPL-2.0, same as NetSurf.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  * Implementation of conversion from DOM tree to box tree.
@@ -62,6 +79,8 @@ struct box_construct_ctx {
 	box_construct_complete_cb cb;	/**< Callback to invoke on completion */
 
 	int *bctx;			/**< talloc context */
+
+	bool sync;			/**< run to completion without yielding (VitaSurf) */
 };
 
 /**
@@ -542,8 +561,17 @@ box_construct_element(struct box_construct_ctx *ctx, bool *convert_children)
 		return false;
 
 	/* If this is the root box, add it to the context */
-	if (props.node_is_root)
+	if (props.node_is_root) {
 		ctx->root_box = box;
+		/*
+		 * rem lengths are resolved against the root's style through
+		 * the unit context, which until now pointed at the previous
+		 * tree's root style throughout a rebuild: that style was
+		 * freed with the old tree, so every rem read freed memory
+		 * (VitaSurf).
+		 */
+		ctx->content->unit_len_ctx.root_style = box->style;
+	}
 
 	/* Deal with colspan/rowspan */
 	err = dom_element_get_attribute(ctx->n, corestring_dom_colspan, &s);
@@ -1308,7 +1336,7 @@ static void convert_xml_to_box(struct box_construct_ctx *ctx)
 			free(ctx);
 			return;
 		}
-	} while (++num_processed < max_processed_before_yield);
+	} while (++num_processed < max_processed_before_yield || ctx->sync);
 
 	/* More work to do: schedule a continuation */
 	guit->misc->schedule(0, (void *)convert_xml_to_box, ctx);
@@ -1344,10 +1372,44 @@ dom_to_box(dom_node *n,
 	ctx->root_box = NULL;
 	ctx->cb = cb;
 	ctx->bctx = c->bctx;
+	ctx->sync = false;
 
 	*box_conversion_context = ctx;
 
 	return guit->misc->schedule(0, (void *)convert_xml_to_box, ctx);
+}
+
+
+/* exported function documented in html/box_construct.h */
+nserror
+dom_to_box_sync(dom_node *n, html_content *c, box_construct_complete_cb cb)
+{
+	struct box_construct_ctx *ctx;
+
+	if (c->bctx == NULL) {
+		/* create a context allocation for this box tree */
+		c->bctx = talloc_zero(0, int);
+		if (c->bctx == NULL) {
+			return NSERROR_NOMEM;
+		}
+	}
+
+	ctx = malloc(sizeof(*ctx));
+	if (ctx == NULL) {
+		return NSERROR_NOMEM;
+	}
+
+	ctx->content = c;
+	ctx->n = dom_node_ref(n);
+	ctx->root_box = NULL;
+	ctx->cb = cb;
+	ctx->bctx = c->bctx;
+	ctx->sync = true;
+
+	/* runs the whole conversion, calls cb, and frees ctx */
+	convert_xml_to_box(ctx);
+
+	return NSERROR_OK;
 }
 
 

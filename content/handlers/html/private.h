@@ -16,6 +16,22 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * declared html_relayout(); html_content gained late_css_retries
+ * (VitaSurf) and deferred_links (netsurf_upy).
+ *
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0105-netsurf-late-stylesheets.patch, by Breezyslasher.
+ * GPL-2.0, same as NetSurf.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  * Private data for text/html content.
@@ -157,6 +173,11 @@ typedef struct html_content {
 	struct html_stylesheet *stylesheets;
 	/**< Style selection context */
 	css_select_ctx *select_ctx;
+	/** retries of the rebuild a late stylesheet asks for (VitaSurf) */
+	unsigned late_css_retries;
+	/** <link> stylesheets whose fetch was held back past conversion
+	 *  (netsurf_upy, nsoption defer_author_stylesheets) */
+	struct html_deferred_link *deferred_links;
 	/**< Style selection media specification */
 	css_media media;
 	/** CSS length conversion context for document. */
@@ -313,6 +334,18 @@ bool html_redraw_inline_borders(struct box *box, struct rect b,
 /* in html/script.c */
 dom_hubbub_error html_process_script(void *ctx, dom_node *node);
 
+
+/**
+ * Rebuild the box tree from the (script-modified) document and lay it
+ * out again (VitaSurf).
+ *
+ * \param htmlc html content whose layout is stale
+ * \return NSERROR_OK if the layout was rebuilt, NSERROR_INVALID if the
+ *         content is not in a state where that is possible right now
+ *         (still converting, being dragged, typed into) and the caller
+ *         should try again later.
+ */
+nserror html_relayout(html_content *htmlc);
 
 /* in html/forms.c */
 struct form *html_forms_get_forms(const char *docenc, dom_html_document *doc);

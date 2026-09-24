@@ -16,6 +16,19 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * declared html_object_free_list().
+ *
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
+ * GPL-2.0, same as NetSurf.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  * HTML content object interface
@@ -55,6 +68,17 @@ bool html_fetch_object(struct html_content *c, struct nsurl *url, struct box *bo
  * \return NSERROR_OK on success else appropriate error code.
  */
 nserror html_object_free_objects(struct html_content *html);
+
+/**
+ * Release a list of objects that was set aside by a layout rebuild
+ * (VitaSurf).
+ *
+ * \param html    html content the objects belonged to
+ * \param objects head of the saved list, which this consumes
+ * \return NSERROR_OK
+ */
+nserror html_object_free_list(struct html_content *html,
+			      struct content_html_object *objects);
 
 /**
  * close content of content objects associated with a HTML content

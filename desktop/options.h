@@ -16,6 +16,18 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * two options (netsurf_upy): enable_dynamic_relayout, which arms
+ * html_relayout(), and defer_author_stylesheets, which makes a
+ * stylesheet arrive after conversion so that rebuild can be exercised
+ * without a scripting engine.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  * Option available on all platforms
@@ -125,6 +137,24 @@ NSOPTION_BOOL(animate_images, true)
 
 /** Whether to execute javascript */
 NSOPTION_BOOL(enable_javascript, false)
+
+/**
+ * Whether the box tree may be rebuilt from a modified document
+ * (netsurf_upy).  Clear, html_relayout() returns NSERROR_NOT_IMPLEMENTED
+ * and the browser behaves exactly as a build without it.
+ */
+NSOPTION_BOOL(enable_dynamic_relayout, false)
+
+/**
+ * Whether an author <link> stylesheet is fetched only once the document
+ * has been converted (netsurf_upy).  It makes a stylesheet arrive *late*
+ * with no scripting engine in the build, which is how the relayout above
+ * is exercised; nothing else in NetSurf can deliver a stylesheet after
+ * conversion, since html_can_begin_conversion() waits for every one.
+ * TEMPORARY(until a DOM-mutating driver -- a script engine or the ubpy
+ * client -- provides the late change instead).
+ */
+NSOPTION_BOOL(defer_author_stylesheets, false)
 
 /** Whether to allow Author level CSS. */
 NSOPTION_BOOL(author_level_css, true)
