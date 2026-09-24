@@ -1,0 +1,15 @@
+# The dynamic symbols a script-engine plugin publishes: exactly one.
+#
+# Added 2026-09-25 for netsurf_upy (GPLv2 section 2(a), a dated notice of
+# change).  Without this the duktape plugin would export its whole
+# duktape API -- 600-odd `duk_*` symbols -- plus the one libdom symbol
+# `core_thunks.c` has to define.  None of that is the browser's
+# business, and `javascript/engine.c` dlopens with RTLD_LOCAL precisely
+# so that a plugin cannot be reached except through its vtable.  This
+# says the same thing at the linker, where it is checkable.
+NS_SCRIPT_ENGINE_1 {
+	global:
+		ns_script_engine_v1_get;
+	local:
+		*;
+};

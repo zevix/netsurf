@@ -24,6 +24,10 @@
  * stylesheet arrive after conversion so that rebuild can be exercised
  * without a scripting engine.
  *
+ * Changed again 2026-09-25 (netsurf_upy): script_engine_path, which
+ * names a shared object to take the script engine from at run time
+ * instead of the one the build chose.
+ *
  * The fork and the rest of its changes: netsurf_upy/ in the ubitron
  * repository; see netsurf_upy/README.md.
  */
@@ -161,6 +165,19 @@ NSOPTION_BOOL(author_level_css, true)
 
 /** Maximum time (in seconds) to wait for a script to run */
 NSOPTION_INTEGER(script_timeout, 10)
+
+/**
+ * A shared object to take the script engine from (netsurf_upy).
+ *
+ * Unset -- the default -- and the browser uses the engine it was built
+ * with, which is what the NETSURF_USE_DUKTAPE Makefile switch chooses.
+ * Set, `javascript/engine.c` dlopens it, asks it for
+ * `ns_script_engine_v1_get` and uses the vtable that comes back; a
+ * plugin that will not load, will not answer or declares a different
+ * NS_SCRIPT_ENGINE_ABI_V1 is refused with a log line and the built-in
+ * engine keeps running.
+ */
+NSOPTION_STRING(script_engine_path, NULL)
 
 /** How many days to retain URL data for */
 NSOPTION_INTEGER(expire_url, 28)

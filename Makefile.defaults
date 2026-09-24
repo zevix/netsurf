@@ -1,6 +1,12 @@
 #
 # NetSurf default build setup
 #
+# Changed 2026-09-25 for netsurf_upy (GPLv2 section 2(a), a dated notice
+# of change): NETSURF_DUKTAPE_PLUGIN, which builds the duktape engine a
+# second time as a loadable shared object.  The fork and the rest of its
+# changes: netsurf_upy/ in the ubitron repository; see
+# netsurf_upy/README.md.
+#
 #
 # | WARNING: You should NOT be editing this file.
 # |
@@ -70,6 +76,15 @@ NETSURF_USE_WEBP := AUTO
 # Enable NetSurf's use of duktape for javascript
 # Valid options: YES, NO
 NETSURF_USE_DUKTAPE := YES
+
+# Also build duktape as a run-time-loadable script engine, alongside
+# whatever the switch above compiled in (netsurf_upy, 2026-09-25).  The
+# result is `ns_engine_duktape.so` in the build directory; point the
+# `script_engine_path` option at it and `javascript/engine.c` loads the
+# engine from there instead of using the built-in one.  Requires
+# NETSURF_USE_DUKTAPE := YES, which is what generates the bindings.
+# Valid options: YES, NO
+NETSURF_DUKTAPE_PLUGIN := NO
 
 # Enable NetSurf's use of libharu for PDF export and GTK printing support.
 # There is no auto-detection available for this, as it does not have a

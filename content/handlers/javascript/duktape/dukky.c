@@ -22,6 +22,29 @@
 /**
  * \file
  * Duktapeish implementation of javascript engine functions.
+ *
+ * Changed 2026-09-25 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  Three things, none of which alters what the
+ * engine does:
+ *
+ *   * the eleven entry points this file defined as the `js_*` externs
+ *     of `javascript/js.h` are now `dukky_js_*`, and reach the browser
+ *     through `struct ns_script_engine_v1` (`javascript/engine.h`)
+ *     instead.  `javascript/engine.c` owns `js_*` in every build and
+ *     forwards to whichever engine is active.
+ *   * `js_initialise()` no longer calls `javascript_init()`.  The
+ *     accepted-MIME list is not the engine's, and calling it from here
+ *     is what made a `NETSURF_USE_DUKTAPE := NO` build one with no
+ *     CONTENT_JS handler at all; `engine.c` calls it now.
+ *   * with NS_ENGINE_PLUGIN defined -- the `NETSURF_DUKTAPE_PLUGIN`
+ *     build of this same source as a shared object -- the file exports
+ *     `ns_script_engine_v1_get()` rather than
+ *     `ns_builtin_script_engine()`, and every browser symbol it calls
+ *     is redirected through the callback table that entry point is
+ *     handed.  See `javascript/core.h`.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
  */
 
 #include <stdint.h>
@@ -35,7 +58,8 @@
 #include "content/content.h"
 
 #include "javascript/js.h"
-#include "javascript/content.h"
+#include "javascript/core.h"
+#include "javascript/engine.h"
 
 #include "duktape/binding.h"
 #include "duktape/generics.js.inc"
@@ -573,8 +597,9 @@ static void dukky_free_function(void *udata, void *ptr)
 		free(ptr);
 }
 
-/* exported interface documented in js.h */
-void js_initialise(void)
+/* the duktape engine's `initialise`, reached through
+ * `javascript/engine.h`'s vtable */
+void dukky_js_initialise(void)
 {
 	/** TODO: Forces JS on for our testing, needs changing before a release
 	 * lest we incur the wrath of others.
@@ -582,12 +607,16 @@ void js_initialise(void)
 	/* Disabled force-on for forthcoming release */
 	/* nsoption_set_bool(enable_javascript, true);
 	 */
-	javascript_init();
+
+	/* `javascript_init()` used to be called from here, which tied
+	 * the accepted-MIME list of `javascript/content.c` to duktape
+	 * being compiled in.  `javascript/engine.c::js_initialise()`
+	 * calls it now, before any engine runs.  (netsurf_upy G4) */
 }
 
 
 /* exported interface documented in js.h */
-void js_finalise(void)
+void dukky_js_finalise(void)
 {
 	/* NADA for now */
 }
@@ -595,7 +624,7 @@ void js_finalise(void)
 
 /* exported interface documented in js.h */
 nserror
-js_newheap(int timeout, jsheap **heap)
+dukky_js_newheap(int timeout, jsheap **heap)
 {
 	duk_context *ctx;
 	jsheap *ret = calloc(1, sizeof(*ret));
@@ -635,7 +664,7 @@ static void dukky_destroyheap(jsheap *heap)
 }
 
 /* exported interface documented in js.h */
-void js_destroyheap(jsheap *heap)
+void dukky_js_destroyheap(jsheap *heap)
 {
 	heap->pending_destroy = true;
 	if (heap->live_threads == 0) {
@@ -647,7 +676,7 @@ void js_destroyheap(jsheap *heap)
 #define CTX (ret->ctx)
 
 /* exported interface documented in js.h */
-nserror js_newthread(jsheap *heap, void *win_priv, void *doc_priv, jsthread **thread)
+nserror dukky_js_newthread(jsheap *heap, void *win_priv, void *doc_priv, jsthread **thread)
 {
 	jsthread *ret;
 	assert(heap != NULL);
@@ -703,13 +732,13 @@ nserror js_newthread(jsheap *heap, void *win_priv, void *doc_priv, jsthread **th
 					  (const char *)polyfill_js, polyfill_js_len) != 0) {
 		NSLOG(dukky, CRITICAL, "%s", duk_safe_to_string(CTX, -1));
 		NSLOG(dukky, CRITICAL, "Unable to compile polyfill.js, thread aborted");
-		js_destroythread(ret);
+		dukky_js_destroythread(ret);
 		return NSERROR_INIT_FAILED;
 	}
 	/* ..., (generics.js) */
 	if (dukky_pcall(CTX, 0, true) != 0) {
 		NSLOG(dukky, CRITICAL, "Unable to run polyfill.js, thread aborted");
-		js_destroythread(ret);
+		dukky_js_destroythread(ret);
 		return NSERROR_INIT_FAILED;
 	}
 	/* ..., result */
@@ -724,13 +753,13 @@ nserror js_newthread(jsheap *heap, void *win_priv, void *doc_priv, jsthread **th
 					  (const char *)generics_js, generics_js_len) != 0) {
 		NSLOG(dukky, CRITICAL, "%s", duk_safe_to_string(CTX, -1));
 		NSLOG(dukky, CRITICAL, "Unable to compile generics.js, thread aborted");
-		js_destroythread(ret);
+		dukky_js_destroythread(ret);
 		return NSERROR_INIT_FAILED;
 	}
 	/* ..., (generics.js) */
 	if (dukky_pcall(CTX, 0, true) != 0) {
 		NSLOG(dukky, CRITICAL, "Unable to run generics.js, thread aborted");
-		js_destroythread(ret);
+		dukky_js_destroythread(ret);
 		return NSERROR_INIT_FAILED;
 	}
 	/* ..., result */
@@ -758,7 +787,7 @@ nserror js_newthread(jsheap *heap, void *win_priv, void *doc_priv, jsthread **th
 #define CTX (thread->ctx)
 
 /* exported interface documented in js.h */
-nserror js_closethread(jsthread *thread)
+nserror dukky_js_closethread(jsthread *thread)
 {
 	/* We can always close down a thread, it might just confuse
 	 * the code running, though we don't mind since we're in the
@@ -812,7 +841,7 @@ static void dukky_destroythread(jsthread *thread)
 }
 
 /* exported interface documented in js.h */
-void js_destroythread(jsthread *thread)
+void dukky_js_destroythread(jsthread *thread)
 {
 	thread->pending_destroy = true;
 	if (thread->in_use == 0) {
@@ -919,7 +948,7 @@ void dukky_log_stack_frame(duk_context *ctx, const char * reason)
 
 /* exported interface documented in js.h */
 bool
-js_exec(jsthread *thread, const uint8_t *txt, size_t txtlen, const char *name)
+dukky_js_exec(jsthread *thread, const uint8_t *txt, size_t txtlen, const char *name)
 {
 	bool ret = false;
 	assert(thread);
@@ -1468,7 +1497,7 @@ void dukky_shuffle_array(duk_context *ctx, duk_uarridx_t idx)
 }
 
 
-void js_handle_new_element(jsthread *thread, struct dom_element *node)
+void dukky_js_handle_new_element(jsthread *thread, struct dom_element *node)
 {
 	assert(thread);
 	assert(node);
@@ -1548,7 +1577,7 @@ out:
 	dukky_leave_thread(thread);
 }
 
-void js_event_cleanup(jsthread *thread, struct dom_event *evt)
+void dukky_js_event_cleanup(jsthread *thread, struct dom_event *evt)
 {
 	assert(thread);
 	dukky_enter_thread(thread);
@@ -1564,7 +1593,7 @@ void js_event_cleanup(jsthread *thread, struct dom_event *evt)
 	dukky_leave_thread(thread);
 }
 
-bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc, struct dom_node *target)
+bool dukky_js_fire_event(jsthread *thread, const char *type, struct dom_document *doc, struct dom_node *target)
 {
 	dom_exception exc;
 	dom_event *evt;
@@ -1668,7 +1697,7 @@ bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc,
 
 		duk_pop_n(CTX, 6);
 		/* ... */
-		js_event_cleanup(thread, evt);
+		dukky_js_event_cleanup(thread, evt);
 		dom_event_unref(evt);
 		dukky_leave_thread(thread);
 		return true;
@@ -1676,8 +1705,129 @@ bool js_fire_event(jsthread *thread, const char *type, struct dom_document *doc,
 	/* ... result */
 	duk_pop(CTX);
 	/* ... */
-	js_event_cleanup(thread, evt);
+	dukky_js_event_cleanup(thread, evt);
 	dom_event_unref(evt);
 	dukky_leave_thread(thread);
 	return true;
 }
+
+
+/* ------------------------------------------------------------------ */
+/* The engine seam (netsurf_upy G4, 2026-09-25)                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * `javascript/engine.h`'s vtable is plain C, so each of the eleven is
+ * reached through a thunk that puts the opaque `void *` back into the
+ * type the implementation above was written with.  Nothing else about
+ * the engine changes between a built-in duktape and a loaded one: it is
+ * the same source, the same objects and the same behaviour, which is
+ * the whole point of moving it through the seam first.
+ */
+
+static int dukky_engine_newheap(int timeout, void **heap)
+{
+	return (int) dukky_js_newheap(timeout, (jsheap **) heap);
+}
+
+static void dukky_engine_destroyheap(void *heap)
+{
+	dukky_js_destroyheap((jsheap *) heap);
+}
+
+static int dukky_engine_newthread(void *heap, void *win_priv, void *doc_priv,
+				  void **thread)
+{
+	return (int) dukky_js_newthread((jsheap *) heap, win_priv, doc_priv,
+					(jsthread **) thread);
+}
+
+static int dukky_engine_closethread(void *thread)
+{
+	return (int) dukky_js_closethread((jsthread *) thread);
+}
+
+static void dukky_engine_destroythread(void *thread)
+{
+	dukky_js_destroythread((jsthread *) thread);
+}
+
+static int dukky_engine_exec(void *thread, const uint8_t *txt, size_t txtlen,
+			     const char *name)
+{
+	return dukky_js_exec((jsthread *) thread, txt, txtlen, name) ? 1 : 0;
+}
+
+static int dukky_engine_fire_event(void *thread, const char *type, void *doc,
+				   void *target)
+{
+	return dukky_js_fire_event((jsthread *) thread, type,
+				   (struct dom_document *) doc,
+				   (struct dom_node *) target) ? 1 : 0;
+}
+
+static void dukky_engine_handle_new_element(void *thread, void *node)
+{
+	dukky_js_handle_new_element((jsthread *) thread,
+				    (struct dom_element *) node);
+}
+
+static void dukky_engine_event_cleanup(void *thread, void *evt)
+{
+	dukky_js_event_cleanup((jsthread *) thread, (struct dom_event *) evt);
+}
+
+static const struct ns_script_engine_v1 dukky_engine_v1 = {
+	.abi = NS_SCRIPT_ENGINE_ABI_V1,
+	.name = "duktape",
+
+	.initialise = dukky_js_initialise,
+	.finalise = dukky_js_finalise,
+
+	.newheap = dukky_engine_newheap,
+	.destroyheap = dukky_engine_destroyheap,
+
+	.newthread = dukky_engine_newthread,
+	.closethread = dukky_engine_closethread,
+	.destroythread = dukky_engine_destroythread,
+
+	.exec = dukky_engine_exec,
+	.fire_event = dukky_engine_fire_event,
+	.handle_new_element = dukky_engine_handle_new_element,
+	.event_cleanup = dukky_engine_event_cleanup,
+};
+
+#ifdef NS_ENGINE_PLUGIN
+
+/* exported interface documented in javascript/core.h */
+const struct ns_script_core_v1 *ns_script_core;
+
+/**
+ * The plugin's one exported symbol.
+ *
+ * Takes the browser's callback table -- without which this object
+ * cannot call a single thing outside the C library -- and returns the
+ * engine.  The browser then checks `abi` and may refuse us; that is
+ * why nothing here does any work.
+ */
+const struct ns_script_engine_v1 *
+ns_script_engine_v1_get(const struct ns_script_core_v1 *core)
+{
+	if (core == NULL) {
+		return NULL;
+	}
+
+	ns_script_core = core;
+
+	return &dukky_engine_v1;
+}
+
+#else /* NS_ENGINE_PLUGIN */
+
+/* exported interface documented in javascript/engine.h */
+const struct ns_script_engine_v1 *ns_builtin_script_engine(void)
+{
+	return &dukky_engine_v1;
+}
+
+#endif /* NS_ENGINE_PLUGIN */
