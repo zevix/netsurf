@@ -40,6 +40,21 @@
  *
  * It is built only when `NETSURF_DUKTAPE_PLUGIN := YES`, and it is not
  * installed by the browser's own install rule.
+ *
+ * > **Corrected 2026-09-25 (G4 audit, item 1).**  The sentence above is
+ * > true of NetSurf's `make install` and misleading about what ships,
+ * > which is the only question a later phase will be asking.  This
+ * > object *is* installed: `RD/nix/flake.nix`'s `postInstall` takes it
+ * > out of the build directory by hand, because `make install` knows
+ * > nothing about `POSTEXES`.  What is true -- and is now an
+ * > arrangement rather than an accident (G4 audit, item 2) -- is that
+ * > it is installed **beside** the engines and not among them, to
+ * > `$out/lib/netsurf-test/`, and that it reaches exactly one image:
+ * > the `<board>-netsurf-abi-mismatch-probe` the ABI-mismatch arm
+ * > boots, which names this file explicitly.  `netsurfProbeFor` takes
+ * > the objects it installs as an argument and globs nothing, so the
+ * > ordinary probe image does not carry this fixture and no future
+ * > fixture can ship by being written.
  */
 
 #include <stdint.h>
