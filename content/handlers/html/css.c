@@ -132,6 +132,18 @@ static void html_css_late_rebuild(void *pw)
 	css_select_ctx *fresh = NULL;
 	nserror err;
 
+	if (nsoption_bool(enable_dynamic_relayout) == false) {
+		/*
+		 * netsurf_upy: with the mechanism off, a late sheet is
+		 * ignored exactly as upstream ignores it
+		 * (html_finish_conversion(): "Ignoring style change: NS
+		 * layout is static.").  Nothing is rebuilt, nothing is
+		 * destroyed, and the selection context the box tree was
+		 * built with stays the one it has.
+		 */
+		return;
+	}
+
 	if (c->select_ctx == NULL || c->aborted) {
 		return;
 	}
