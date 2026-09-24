@@ -35,6 +35,12 @@
  * redraw.c and interaction.c already did, and html_get_box_tree()
  * documents that it may return NULL.
  *
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change), a third time: html_clear_box_node_data() walks the
+ * outgoing box tree, so that a DOM node detached from the document
+ * element's subtree does not keep a __ns_key_box_node_data pointer into
+ * the freed bctx.
+ *
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
  * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
@@ -1157,10 +1163,64 @@ static void html_reformat(struct content *c, int width, int height)
 
 
 /**
+ * Forget the box every node in an outgoing box tree was given
+ * (netsurf_upy).
+ *
+ * html_clear_node_boxes() below walks the *document element's* subtree,
+ * which is not the same set of nodes. A node detached from the document
+ * after its box was built is no longer in that subtree, yet it still
+ * carries __ns_key_box_node_data pointing into the bctx that is about to
+ * be freed, and still carries libcss node data selected against the
+ * outgoing context. box_for_node() would then hand a **freed** box to
+ * dom_event.c::html_texty_element_update() and to the four call sites in
+ * box_construct.c, every one of which tests only for NULL.
+ *
+ * Walking the box tree reaches those nodes, because a box holds its own
+ * reference to the node it was made from (box_construct.c:
+ * `box->node = dom_node_ref(ctx->n)`, released by
+ * box_talloc_destructor()). Every node reached here is therefore alive
+ * for as long as the tree is -- which is why this must run before
+ * talloc_free(htmlc->bctx), not after.
+ *
+ * The two walks overlap, and that is harmless: dom_node_set_user_data()
+ * to NULL and nscss_clear_node_data() are both idempotent.
+ */
+static void html_clear_box_node_data(struct box *box)
+{
+	while (box != NULL) {
+		if (box->node != NULL) {
+			void *old = NULL;
+
+			dom_node_set_user_data(box->node,
+					corestring_dom___ns_key_box_node_data,
+					NULL, NULL, &old);
+			nscss_clear_node_data(box->node);
+		}
+
+		/* a list marker hangs off its box, not off the child
+		 * chain, so it needs asking for separately */
+		if (box->list_marker != NULL) {
+			html_clear_box_node_data(box->list_marker);
+		}
+
+		/* float children appear in this chain as well, so
+		 * float_children needs no separate walk */
+		html_clear_box_node_data(box->children);
+
+		box = box->next;
+	}
+}
+
+
+/**
  * Forget the boxes and cached styles the last conversion attached to the
  * DOM nodes (VitaSurf). A node that gets no box this time round (display:
  * none now) would otherwise keep a dangling pointer for box_for_node(),
  * and libcss will not select a style for a node that still carries one.
+ *
+ * This walk covers the nodes that are still in the document but got no
+ * box; html_clear_box_node_data() covers the nodes that got a box but may
+ * no longer be in the document. Both are needed (netsurf_upy).
  */
 static void html_clear_node_boxes(dom_node *root)
 {
@@ -1311,6 +1371,11 @@ nserror html_relayout(html_content *htmlc)
 		browser_window_destroy_iframes(htmlc->bw);
 	}
 
+	/* Both halves, and both before the bctx goes: the box tree is the
+	 * only way to reach a node that has been detached from the
+	 * document, and it is also what keeps such a node alive
+	 * (netsurf_upy). */
+	html_clear_box_node_data(htmlc->layout);
 	html_clear_node_boxes(html);
 
 	/* iframes and framesets live in the box tree's talloc context */
