@@ -115,7 +115,8 @@ struct html_deferred_link {
 };
 
 
-static bool html_css_link_fetch(html_content *htmlc, dom_node *node);
+static bool html_css_link_fetch(html_content *htmlc, dom_node *node,
+				bool may_defer);
 
 
 /**
@@ -186,7 +187,7 @@ static void html_css_deferred_links_cb(void *pw)
 
 		c->deferred_links = link->next;
 
-		html_css_link_fetch(c, link->node);
+		html_css_link_fetch(c, link->node, false);
 		dom_node_unref(link->node);
 		free(link);
 	}
@@ -525,47 +526,50 @@ bool html_css_process_style(html_content *c, dom_node *node)
 /* exported function documented in html/css.h */
 bool html_css_process_link(html_content *htmlc, dom_node *node)
 {
-	struct html_deferred_link *link;
+	return html_css_link_fetch(htmlc, node, true);
+}
 
-	if (nsoption_bool(defer_author_stylesheets) &&
-	    htmlc->select_ctx == NULL) {
-		/*
-		 * netsurf_upy: hold the fetch back until the document has
-		 * been converted, so the sheet arrives *late* and takes
-		 * the same path a script-added one would.  Nothing else in
-		 * NetSurf can deliver a stylesheet after conversion --
-		 * every fetch is counted in base.active and
-		 * html_can_begin_conversion() waits for all of them -- so
-		 * without this the late path above is unreachable in a
-		 * build with no scripting engine.
-		 * TEMPORARY(until a DOM-mutating driver provides the late
-		 * change instead).
-		 */
-		link = malloc(sizeof(*link));
-		if (link == NULL) {
-			content_broadcast_error(&htmlc->base, NSERROR_NOMEM,
-						NULL);
-			return false;
-		}
-		link->node = dom_node_ref(node);
-		link->next = htmlc->deferred_links;
-		htmlc->deferred_links = link;
 
-		NSLOG(netsurf, INFO, "deferring linked stylesheet (%p)",
-		      htmlc);
+/**
+ * Hold a <link> stylesheet's fetch back until the document has been
+ * converted (netsurf_upy).
+ *
+ * The queue is in document order -- a stylesheet's place in it decides
+ * the cascade -- so this appends.
+ */
+static bool html_css_defer_link(html_content *htmlc, dom_node *node)
+{
+	struct html_deferred_link *link, **tail;
 
-		return true;
+	link = malloc(sizeof(*link));
+	if (link == NULL) {
+		content_broadcast_error(&htmlc->base, NSERROR_NOMEM, NULL);
+		return false;
 	}
+	link->node = dom_node_ref(node);
+	link->next = NULL;
 
-	return html_css_link_fetch(htmlc, node);
+	for (tail = &htmlc->deferred_links; *tail != NULL;
+	     tail = &(*tail)->next) {
+		/* to the back */
+	}
+	*tail = link;
+
+	NSLOG(netsurf, INFO, "deferring linked stylesheet (%p)", htmlc);
+
+	return true;
 }
 
 
 /**
  * Start the fetch of one <link> stylesheet: html_css_process_link()'s
  * body, split out so a deferred link can be fetched later (netsurf_upy).
+ *
+ * \param may_defer  false on the deferred pass, so a sheet that was held
+ *                   back is fetched rather than queued a second time.
  */
-static bool html_css_link_fetch(html_content *htmlc, dom_node *node)
+static bool html_css_link_fetch(html_content *htmlc, dom_node *node,
+				bool may_defer)
 {
 	dom_string *rel, *type_attr, *media, *href;
 	struct html_stylesheet *stylesheets;
@@ -633,6 +637,27 @@ static bool html_css_link_fetch(html_content *htmlc, dom_node *node)
 
 	NSLOG(netsurf, INFO, "linked stylesheet %i '%s'",
 	      htmlc->stylesheet_count, nsurl_access(joined));
+
+	if (may_defer && nsoption_bool(defer_author_stylesheets) &&
+	    htmlc->select_ctx == NULL) {
+		/*
+		 * netsurf_upy: hold this fetch back until the document has
+		 * been converted, so the sheet arrives *late* and takes
+		 * the path a script-added one would.  Nothing else in
+		 * NetSurf can deliver a stylesheet after conversion --
+		 * every fetch is counted in base.active and
+		 * html_can_begin_conversion() waits for all of them -- so
+		 * without this the rebuild in html_convert_css_callback()
+		 * is unreachable in a build with no scripting engine.
+		 * The decision is made here, after the rel/type/media
+		 * filtering above, so nothing is queued that would not
+		 * have been fetched.
+		 * TEMPORARY(until a DOM-mutating driver provides the late
+		 * change instead).
+		 */
+		nsurl_unref(joined);
+		return html_css_defer_link(htmlc, node);
+	}
 
 	/* extend stylesheets array to allow for new sheet */
 	stylesheets = realloc(htmlc->stylesheets,
