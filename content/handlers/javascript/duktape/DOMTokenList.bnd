@@ -8,19 +8,68 @@
  *         http://www.opensource.org/licenses/mit-license
  */
 
+
+/*
+ * Changed 2026-09-24 for netsurf_upy (a dated notice of change; this
+ * file is MIT-licensed inside a GPL-2.0 program, and the notice is kept
+ * in the same form the GPL-2.0 files in this fork carry).  Add(), remove() and toggle() mark
+ * the document dirty, so that html_relayout() rebuilds the box tree
+ * from it (html_mark_dom_dirty_node()).  `element.classList.add("hot")`
+ * is one of the three things a real client reaches for first, and until
+ * now it changed the class attribute and moved no pixel.
+ *
+ * The list has to be told which element it is a view of: libdom's
+ * dom/core/tokenlist.h publishes no accessor from a dom_tokenlist back
+ * to the dom_element it was created against, so the node arrives as a
+ * second init argument from Element.bnd's classList getter -- the one
+ * place a DOMTokenList is ever made -- and the list holds a reference of
+ * its own for as long as it lives.
+ *
+ * The policy behind the flag -- coalesce, gate, budget, quiet period --
+ * is adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by
+ * Breezyslasher, whose vita/js/qjs.c calls the same thing mark_dirty().
+ * GPL-2.0, same as NetSurf.  No line of qjs.c is copied here: that file
+ * is a QuickJS engine and this is duktape's binding layer.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 class DOMTokenList {
 	private struct dom_tokenlist *tokens;
+	/* netsurf_upy: the element this list is a view of, referenced.
+	 * Set by DOMSettableTokenList's init (see this class's init), and
+	 * unreferenced by this class's fini. */
+	private struct dom_node *node;
+	prologue %{
+/* The same "smidge naughty" reach CanvasRenderingContext2D.bnd makes,
+ * and for the same reason: a mutating binding has to be able to tell the
+ * html content its document changed (netsurf_upy). */
+#include "content/handlers/html/private.h"
+%};
 };
 
 init DOMTokenList(struct dom_tokenlist *tokens)
 %{
 	priv->tokens = tokens;
 	dom_tokenlist_ref(tokens);
+	/* netsurf_upy: `node` is filled in by the subclass init, not by
+	 * this one -- nsgenbind forwards only the first ::-mapped argument
+	 * of a derived init to its parent's (measured against
+	 * nsgenbind 0.9: a second one is dropped from the generated call
+	 * and the build then fails to compile), so DOMSettableTokenList's
+	 * init writes priv->parent.node itself.  calloc() in the generated
+	 * constructor leaves it NULL until then, and NULL is handled
+	 * everywhere it is read. */
 %}
 
 fini DOMTokenList()
 %{
 	dom_tokenlist_unref(priv->tokens);
+	if (priv->node != NULL) {
+		dom_node_unref(priv->node);
+	}
 %}
 
 getter DOMTokenList::length()
@@ -77,7 +126,11 @@ method DOMTokenList::add()
 		exc = dom_tokenlist_add(priv->tokens, value);
 		dom_string_unref(value);
 	}
-	
+	/* after the loop, not inside it: nothing here touches the duktape
+	 * stack the loop is walking, and one gesture is one rebuild
+	 * anyway (netsurf_upy) */
+	html_mark_dom_dirty_node(priv->node);
+
 	return 0;
 %}
 
@@ -100,7 +153,8 @@ method DOMTokenList::remove()
 		exc = dom_tokenlist_remove(priv->tokens, value);
 		dom_string_unref(value);
 	}
-	
+	html_mark_dom_dirty_node(priv->node);
+
 	return 0;
 %}
 
@@ -158,6 +212,9 @@ method DOMTokenList::toggle()
 		}
 	}
 	dom_string_unref(value);
+	/* whichever arm of the matrix above ran, the class attribute is
+	 * what it wrote to (netsurf_upy) */
+	html_mark_dom_dirty_node(priv->node);
 
 	return 0;
 %}

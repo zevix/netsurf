@@ -55,6 +55,13 @@
  * policy (dirty flag, coalesce, gate, budget, quiet period) is
  * VitaSurf's vita/js/qjs.c, ported and not copied.
  *
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change), a sixth time, comments only (G3 remediation): the
+ * retry budget's deliberate conservatism is written down at
+ * html_mark_dom_dirty(), and the cost estimate in html_dom_dirty_cb()
+ * says why scaling a per-element figure that is mostly fixed cost errs
+ * high, which is the right way for a ceiling to err.
+ *
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
  * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
@@ -1650,6 +1657,18 @@ static void html_dom_dirty_cb(void *pw)
 		return;
 	}
 
+	/*
+	 * netsurf_upy: this scales a per-element figure, and the measured
+	 * per-element figure for a small page is nearly all fixed cost --
+	 * 8 ms for 13 elements is 615 us/element, where VitaSurf's own
+	 * native curve (932 elements in 9 ms, 5 460 in 78 ms) puts the
+	 * *marginal* cost nearer 10 us/element.  So the estimate is high,
+	 * by up to two orders of magnitude, and that is the direction a
+	 * ceiling should err in: it refuses a page it might have managed,
+	 * and never accepts one it cannot.  The figure is a budget input,
+	 * not a rate to quote -- anything reporting a per-element cost
+	 * says which page it measured.
+	 */
 	if (c->relayout_count > 0 && c->relayout_elements > 0) {
 		estimate = (c->relayout_last_ms * elements) /
 				c->relayout_elements;
@@ -1725,6 +1744,22 @@ void html_mark_dom_dirty(html_content *htmlc)
 		return;
 	}
 
+	/*
+	 * netsurf_upy: the retry budget is reset only when the flag goes
+	 * up, so a mutation arriving while html_dom_dirty_cb() is still
+	 * retrying inherits what is left of the 30 rather than starting
+	 * a fresh 30.  That is deliberate and it is the conservative
+	 * direction: the budget bounds how long this keeps asking while
+	 * the content is not yet CONTENT_STATUS_DONE, and a document
+	 * being mutated in a loop during its own load must not be able
+	 * to hold the timer open indefinitely by mutating again.  The
+	 * cost of being wrong is bounded too -- html_dom_dirty_retry()
+	 * clears dom_dirty when it gives up, so the *next* mutation
+	 * starts a full budget, and a rebuild that succeeds clears the
+	 * count in html_dom_dirty_cb().  In steady state, which is every
+	 * mutation after the page is done, the budget is always full and
+	 * this is unreachable.
+	 */
 	if (htmlc->dom_dirty == false) {
 		htmlc->dom_dirty = true;
 		htmlc->dom_dirty_retries = 0;

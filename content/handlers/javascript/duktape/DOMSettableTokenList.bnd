@@ -8,10 +8,50 @@
  *         http://www.opensource.org/licenses/mit-license
  */
 
+
+/*
+ * Changed 2026-09-24 for netsurf_upy (a dated notice of change; this
+ * file is MIT-licensed inside a GPL-2.0 program, and the notice is kept
+ * in the same form the GPL-2.0 files in this fork carry).  The value setter marks the
+ * document dirty, so that html_relayout() rebuilds the box tree from it
+ * (html_mark_dom_dirty_node()); `element.classList.value = "hot"` is
+ * `element.className = "hot"` by another road.  The init forwards the
+ * element DOMTokenList now takes, which Element.bnd's classList getter
+ * supplies.
+ *
+ * The policy behind the flag -- coalesce, gate, budget, quiet period --
+ * is adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by
+ * Breezyslasher, whose vita/js/qjs.c calls the same thing mark_dirty().
+ * GPL-2.0, same as NetSurf.  No line of qjs.c is copied here: that file
+ * is a QuickJS engine and this is duktape's binding layer.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 class DOMSettableTokenList {
+	prologue %{
+/* The same "smidge naughty" reach CanvasRenderingContext2D.bnd makes,
+ * and for the same reason: a mutating binding has to be able to tell the
+ * html content its document changed (netsurf_upy). */
+#include "content/handlers/html/private.h"
+%};
 };
 
-init DOMSettableTokenList(struct dom_tokenlist *tokens::tokens);
+init DOMSettableTokenList(struct dom_tokenlist *tokens::tokens, struct dom_node *node)
+%{
+	/* netsurf_upy: the element this list is a view of, from
+	 * Element.bnd's classList getter -- the one place a token list is
+	 * made.  It is written into the parent's private data rather than
+	 * passed to the parent's init because nsgenbind forwards only the
+	 * first ::-mapped argument; DOMTokenList's fini drops the
+	 * reference taken here. */
+	priv->parent.node = node;
+	if (node != NULL) {
+		dom_node_ref(node);
+	}
+%}
 
 getter DOMSettableTokenList::value()
 %{
@@ -39,6 +79,8 @@ setter DOMSettableTokenList::value()
 
     exc = dom_tokenlist_set_value(priv->parent.tokens, value);
     dom_string_unref(value);
+    /* netsurf_upy */
+    html_mark_dom_dirty_node(priv->parent.node);
 
     return 0;
 %}

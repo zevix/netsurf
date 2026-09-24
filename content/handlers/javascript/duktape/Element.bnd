@@ -15,6 +15,15 @@
  * document dirty, so that html_relayout() rebuilds the box tree from it
  * (html_mark_dom_dirty_node()).
  *
+ * Changed 2026-09-24 for netsurf_upy, a second time (G3 remediation):
+ * the className setter, the id setter and removeAttribute() mark it too,
+ * and the classList getter hands the DOMTokenList object the element it
+ * was made from, so that DOMTokenList.bnd's add(), remove() and toggle()
+ * and DOMSettableTokenList.bnd's value setter can mark from it.  An
+ * audit measured `el.className = "hot"` changing the document with the
+ * feature fully on and repainting not one pixel; a mutating binding
+ * that does not mark is that gap.
+ *
  * The policy behind the flag -- coalesce, gate, budget, quiet period --
  * is adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
  * patches/0022-netsurf-relayout-after-script-changes.patch, by
@@ -276,6 +285,8 @@ setter Element::id ()
 					idstr);
 	dom_string_unref(idstr);
 	if (exc != DOM_NO_ERR) return 0;
+	/* an id selector is a selector (netsurf_upy) */
+	html_mark_dom_dirty_node(priv->parent.node);
 	return 0;
 %}
 
@@ -293,6 +304,9 @@ method Element::removeAttribute()
 	exc = dom_element_remove_attribute(priv->parent.node, attr);
 	dom_string_unref(attr);
 	if (exc != DOM_NO_ERR) return 0;
+	/* removing an attribute changes what a selector matches exactly as
+	 * setting one does (netsurf_upy) */
+	html_mark_dom_dirty_node(priv->parent.node);
 	return 0;
 %}
 
@@ -414,6 +428,10 @@ setter Element::className ()
 					classstr);
 	dom_string_unref(classstr);
 	if (exc != DOM_NO_ERR) return 0;
+	/* the class attribute is what most selectors match on, so the box
+	 * tree is stale even though the tree of nodes is not
+	 * (netsurf_upy) */
+	html_mark_dom_dirty_node(priv->parent.node);
 	return 0;
 %}
 
@@ -434,8 +452,15 @@ getter Element::classList ()
 		/* Create a settable tokenlist - While the IDL says this isn't settable, all browsers
 		 * seem to make it settable, so we'll permit it too
 		 */
+		/* netsurf_upy: the second argument is the element this list
+		 * is a view of.  libdom's tokenlist carries no way back to
+		 * its element (dom/core/tokenlist.h publishes no accessor),
+		 * and DOMTokenList's mutating methods have to be able to
+		 * tell the html content its document changed.  The list
+		 * takes a reference of its own, dropped in its fini. */
 		duk_push_pointer(ctx, tokens);
-		if (dukky_create_object(ctx, PROTO_NAME(DOMSETTABLETOKENLIST), 1) != DUK_EXEC_SUCCESS) {
+		duk_push_pointer(ctx, priv->parent.node);
+		if (dukky_create_object(ctx, PROTO_NAME(DOMSETTABLETOKENLIST), 2) != DUK_EXEC_SUCCESS) {
 			dom_tokenlist_unref(tokens);
 			NSLOG(dukky, DEBUG, "Unable to create DOMSettableTokenList object");
 			return 0; /* Coerced to undefined */

@@ -16,6 +16,13 @@
  * document dirty, so that html_relayout() rebuilds the box tree from it
  * (html_mark_dom_dirty_node()).
  *
+ * Changed 2026-09-24 for netsurf_upy, a second time (G3 remediation):
+ * replaceChild(), normalize() and the nodeValue setter mark it too.
+ * They change the document exactly as the four above do and were the
+ * remaining mutating bindings on this interface; an audit measured that
+ * a mutating binding which does not mark repaints nothing at all, with
+ * the feature fully on.
+ *
  * The policy behind the flag -- coalesce, gate, budget, quiet period --
  * is adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
  * patches/0022-netsurf-relayout-after-script-changes.patch, by
@@ -244,6 +251,9 @@ setter Node::nodeValue()
 	exc = dom_node_set_node_value(priv->node, content);
 	dom_string_unref(content);
 	if (exc != DOM_NO_ERR) return 0;
+	/* the value of a text or comment node is what its text box draws
+	 * (netsurf_upy) */
+	html_mark_dom_dirty_node(priv->node);
 	return 1;
 %}
 
@@ -287,6 +297,10 @@ method Node::normalize()
 	dom_exception exc;
 	exc = dom_node_normalize(priv->node);
 	if (exc != DOM_NO_ERR) return 0;
+	/* adjacent text nodes are merged and empty ones dropped, so the
+	 * text boxes under this node are not the ones the box tree holds
+	 * (netsurf_upy) */
+	html_mark_dom_dirty_node(priv->node);
 	return 0;
 %}
 
@@ -494,6 +508,9 @@ method Node::replaceChild()
 
 	err = dom_node_replace_child(priv->node, other->node, old->node, &spare);
 	if (err != DOM_NO_ERR) return 0;
+	/* mark from the parent, which is in the document whatever either
+	 * child's state is (netsurf_upy) */
+	html_mark_dom_dirty_node(priv->node);
 	dukky_push_node(ctx, spare);
 	dom_node_unref(spare);
 

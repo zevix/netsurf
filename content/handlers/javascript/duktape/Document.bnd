@@ -8,6 +8,33 @@
  *         http://www.opensource.org/licenses/mit-license
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (a dated notice of change; this
+ * file is MIT-licensed inside a GPL-2.0 program, and the notice is kept
+ * in the same form the GPL-2.0 files in this fork carry).  write() and
+ * writeln() mark the document dirty, so that html_relayout() rebuilds
+ * the box tree from it (html_mark_dom_dirty()).  Both already hold the
+ * html_content -- they fetch it to reach htmlc->parser -- so they mark
+ * it directly rather than through a node.
+ *
+ * A chunk inserted while the page is still parsing needs no rebuild and
+ * gets none: html_dom_dirty_cb() gates on CONTENT_STATUS_DONE with
+ * nothing in flight, which is exactly the case document.write() was
+ * designed for.  What the mark is for is the other one -- a write()
+ * from a handler, after the document is done -- which changes the
+ * document and, until now, moved no pixel.
+ *
+ * The policy behind the flag -- coalesce, gate, budget, quiet period --
+ * is adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by
+ * Breezyslasher, whose vita/js/qjs.c calls the same thing mark_dirty().
+ * GPL-2.0, same as NetSurf.  No line of qjs.c is copied here: that file
+ * is a QuickJS engine and this is duktape's binding layer.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 prologue Document()
 %{
 #include "utils/corestrings.h"
@@ -52,6 +79,8 @@ method Document::write()
 
 	dom_hubbub_parser_insert_chunk(htmlc->parser,
 			(uint8_t *)text, text_len);
+	/* netsurf_upy */
+	html_mark_dom_dirty(htmlc);
 
 	return 0;
 %}
@@ -86,6 +115,8 @@ method Document::writeln()
 
 	dom_hubbub_parser_insert_chunk(htmlc->parser, (uint8_t *)text, text_len);
 	dom_hubbub_parser_insert_chunk(htmlc->parser, (uint8_t *)nl, SLEN(nl));
+	/* netsurf_upy */
+	html_mark_dom_dirty(htmlc);
 
 	return 0;
 %}
