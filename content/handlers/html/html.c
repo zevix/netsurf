@@ -41,6 +41,11 @@
  * element's subtree does not keep a __ns_key_box_node_data pointer into
  * the freed bctx.
  *
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change), a fourth time: html_clear_box_node_data()'s doc
+ * comment undercounted box_for_node()'s call sites and misdescribed
+ * their NULL handling; the corrected count is on the comment itself.
+ *
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
  * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
@@ -1172,8 +1177,32 @@ static void html_reformat(struct content *c, int width, int height)
  * carries __ns_key_box_node_data pointing into the bctx that is about to
  * be freed, and still carries libcss node data selected against the
  * outgoing context. box_for_node() would then hand a **freed** box to
- * dom_event.c::html_texty_element_update() and to the four call sites in
- * box_construct.c, every one of which tests only for NULL.
+ * dom_event.c::html_texty_element_update() and to the seven call sites
+ * in box_construct.c.
+ *
+ * Corrected 2026-09-24 (netsurf_upy G3). This comment used to read "the
+ * four call sites in box_construct.c, every one of which tests only for
+ * NULL", and both halves of that are wrong. box_construct.c holds
+ * **seven** box_for_node() call expressions, in three functions, and a
+ * NULL test is not the protection the old wording claimed -- a freed box
+ * is non-NULL and passes it:
+ *
+ *   box_extract_properties()       x2, NULL-tested and then
+ *                                  dereferenced (parent_box->style,
+ *                                  parent_box->href, b->type);
+ *   box_construct_element_after()  x1, **not** NULL-tested: assert(box)
+ *                                  and then box->type, box->children;
+ *   next_node()                    x4, NULL-tested only -- but each one
+ *                                  then calls
+ *                                  box_construct_element_after(), which
+ *                                  re-fetches the same key and asserts.
+ *
+ * Nor is box_for_node() the only reader of the key. layout.c reaches
+ * child_box->list_marker through corestring_dom___ns_key_box_node_data
+ * directly, in layout__get_list_item_count() and
+ * layout__ordered_list_count(), and the second of those writes through
+ * marker->list_value. So "box_for_node() bails on NULL" is true of four
+ * sites out of nine, and of none of the three that dereference.
  *
  * Walking the box tree reaches those nodes, because a box holds its own
  * reference to the node it was made from (box_construct.c:
