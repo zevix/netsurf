@@ -8,6 +8,33 @@
  *         http://www.opensource.org/licenses/mit-license
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (a dated notice of change; this
+ * file is MIT-licensed inside a GPL-2.0 program, and the notice is kept
+ * in the same form the GPL-2.0 files in this fork carry).  The width and
+ * height setters mark the document dirty, so that html_relayout()
+ * rebuilds the box tree from it (html_mark_dom_dirty_node()).
+ *
+ * They are the last two hand-written mutating setters in this binding
+ * set: they call dom_html_canvas_element_set_width()/_set_height(), which
+ * change layout-affecting attributes on a live element, and every setter
+ * on the HTML*Element.bnd files is bodyless (nsgenbind writes those, and
+ * there is nowhere in this fork to put a mark in them).  redraw_node()
+ * below is not a substitute -- it repaints the box the canvas already
+ * has, at the size the box already is, and a changed width or height is
+ * exactly the case where that box is the wrong size.
+ *
+ * The policy behind the flag -- coalesce, gate, budget, quiet period --
+ * is adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by
+ * Breezyslasher, whose vita/js/qjs.c calls the same thing mark_dirty().
+ * GPL-2.0, same as NetSurf.  No line of qjs.c is copied here: that file
+ * is a QuickJS engine and this is duktape's binding layer.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 class CanvasRenderingContext2D {
       private struct dom_html_canvas_element *canvas;
       private struct bitmap *bitmap;
@@ -426,6 +453,9 @@ setter CanvasRenderingContext2D::width()
 	exc = dom_html_canvas_element_set_width(priv->canvas, width);
 	if (exc != DOM_NO_ERR) return 0;
 
+	/* a layout-affecting attribute on a live element (netsurf_upy) */
+	html_mark_dom_dirty_node((dom_node *)priv->canvas);
+
 	return 1;
 %}
 
@@ -448,6 +478,9 @@ setter CanvasRenderingContext2D::height()
 
 	exc = dom_html_canvas_element_set_height(priv->canvas, height);
 	if (exc != DOM_NO_ERR) return 0;
+
+	/* a layout-affecting attribute on a live element (netsurf_upy) */
+	html_mark_dom_dirty_node((dom_node *)priv->canvas);
 
 	return 1;
 %}
