@@ -3,6 +3,11 @@
  *
  * This file is part of NetSurf, http://www.netsurf-browser.org/
  *
+ * Changed 2026-09-24 by the ubitron netsurf_upy project (GPLv2 s2(a)):
+ * `-`, `=` and `0` pressed without Ctrl are typed into the focused field
+ * instead of being swallowed by the Ctrl zoom cases of
+ * fb_browser_window_input().  See netsurf_upy/README.md.
+ *
  * NetSurf is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; version 2 of the License.
@@ -943,22 +948,28 @@ fb_browser_window_input(fbtk_widget_t *widget, fbtk_callback_info *cbi)
 			if (modifier & FBTK_MOD_RCTRL ||
 					modifier & FBTK_MOD_LCTRL) {
 				browser_window_set_scale(gw->bw, -0.1, false);
+				break;
 			}
-			break;
+			/* not a zoom: the key is typed like any other */
+			goto type_key;
 
 		case NSFB_KEY_EQUALS: /* PLUS */
 			if (modifier & FBTK_MOD_RCTRL ||
 					modifier & FBTK_MOD_LCTRL) {
 				browser_window_set_scale(gw->bw, 0.1, false);
+				break;
 			}
-			break;
+			/* not a zoom: the key is typed like any other */
+			goto type_key;
 
 		case NSFB_KEY_0:
 			if (modifier & FBTK_MOD_RCTRL ||
 					modifier & FBTK_MOD_LCTRL) {
 				browser_window_set_scale(gw->bw, 1.0, true);
+				break;
 			}
-			break;
+			/* not a zoom: the key is typed like any other */
+			goto type_key;
 
 		case NSFB_KEY_RSHIFT:
 			modifier |= FBTK_MOD_RSHIFT;
@@ -1005,6 +1016,7 @@ fb_browser_window_input(fbtk_widget_t *widget, fbtk_callback_info *cbi)
 			fallthrough;
 
 		default:
+		type_key:
 			ucs4 = fbtk_keycode_to_ucs4(cbi->event->value.keycode,
 						    modifier);
 			if (ucs4 != -1)
