@@ -7,7 +7,11 @@
 # business, and `javascript/engine.c` dlopens with RTLD_LOCAL precisely
 # so that a plugin cannot be reached except through its vtable.  This
 # says the same thing at the linker, where it is checkable.
-NS_SCRIPT_ENGINE_1 {
+#
+# The version block is deliberately *anonymous*: it restricts the export
+# list without versioning the symbol, so `nm -D` and `dlsym` both see a
+# plain `ns_script_engine_v1_get`.
+{
 	global:
 		ns_script_engine_v1_get;
 	local:
