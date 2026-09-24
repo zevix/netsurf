@@ -46,6 +46,15 @@
  * comment undercounted box_for_node()'s call sites and misdescribed
  * their NULL handling; the corrected count is on the comment itself.
  *
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change), a fifth time: html_mark_dom_dirty(),
+ * html_mark_dom_dirty_node(), html_dom_dirty_cb(),
+ * html_dom_dirty_retry() and html_dom_element_count() -- the
+ * DOM-mutation trigger for html_relayout(), which had no caller from a
+ * scripting engine at all.  html_destroy() cancels its timer.  The
+ * policy (dirty flag, coalesce, gate, budget, quiet period) is
+ * VitaSurf's vita/js/qjs.c, ported and not copied.
+ *
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
  * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
@@ -1433,6 +1442,339 @@ nserror html_relayout(html_content *htmlc)
 }
 
 
+/*
+ * The DOM-mutation trigger (netsurf_upy).
+ *
+ * html_relayout() above is the mechanism and it has, until now, exactly
+ * one caller: css.c::html_css_late_rebuild(), which a stylesheet
+ * arriving after conversion wakes.  Nothing calls it when a *script*
+ * changes the document, because no VitaSurf patch touches
+ * content/handlers/javascript/duktape/ at all -- their mark_dirty()
+ * lives only in vita/js/qjs.c, so a duktape build compiles
+ * html_relayout() in and never reaches it.
+ *
+ * What follows is that trigger: the policy of VitaSurf's qjs.c, written
+ * against duktape's bindings instead of QuickJS's.  A dirty flag set by
+ * each mutating binding, coalesced onto one timer, gated on
+ * CONTENT_STATUS_DONE with no fetch outstanding, refused by an element
+ * and cost budget, and followed by a quiet period of about four times
+ * the last rebuild's cost.
+ */
+
+/**
+ * How long every mutation inside one window waits, in ms.  A script that
+ * assigns innerHTML in a loop asks for one rebuild, not one per
+ * assignment: guit->misc->schedule() is keyed on (callback, context) and
+ * frontends/framebuffer/schedule.c::framebuffer_schedule() calls
+ * schedule_remove(callback, p) first "to ensure uniqueness of the
+ * callback and context", so re-scheduling the same pair replaces the
+ * entry rather than adding one.  The coalescing timer therefore needs no
+ * bookkeeping of its own.
+ */
+#define HTML_RELAYOUT_COALESCE_MS 40
+
+/** How long a rebuild that was not possible yet waits before asking
+ * again, and how many times.  Same numbers html_css_late_rebuild() uses.
+ */
+#define HTML_RELAYOUT_RETRY_MS 100
+#define HTML_RELAYOUT_MAX_RETRIES 30
+
+/**
+ * The element budget.  VitaSurf's RELAYOUT_MAX_ELEMENTS, and their
+ * measurement is why it exists: a 6 270-element GitHub profile with 398
+ * stylesheets rebuilt in 55 621 ms natively, against 78 ms for a
+ * 5 460-element page with one small sheet, because the cost is dominated
+ * by CSS selection and not by box building.
+ */
+#define HTML_RELAYOUT_MAX_ELEMENTS 6000
+
+/**
+ * The cost budget, in ms.  VitaSurf's RELAYOUT_MAX_MS, applied to an
+ * estimate made from this page's *own* last rebuild
+ * (relayout_last_ms / relayout_elements) rather than to a constant, so a
+ * page that is cheap per element is not refused for being large.  There
+ * is no estimate before the first rebuild; the element budget covers
+ * that one.
+ */
+#define HTML_RELAYOUT_MAX_MS 8000
+
+/** The quiet period, as a multiple of the last rebuild's cost. */
+#define HTML_RELAYOUT_QUIET_FACTOR 4
+
+
+/**
+ * Count the elements in a document subtree, stopping at `limit`
+ * (netsurf_upy).
+ *
+ * The same iterative walk html_clear_node_boxes() uses -- no recursion,
+ * so a deep document cannot overflow the stack -- and bounded, because
+ * the only question asked of the answer is whether it is over the
+ * budget.
+ *
+ * \param root  subtree to count, usually the document element
+ * \param limit stop once this many elements have been seen
+ * \return the number of elements, at most `limit`
+ */
+static unsigned html_dom_element_count(dom_node *root, unsigned limit)
+{
+	dom_node *n = dom_node_ref(root);
+	unsigned count = 0;
+
+	while (n != NULL && count < limit) {
+		dom_node *next = NULL;
+		dom_node_type type = DOM_NODE_TYPE_COUNT;
+
+		if (dom_node_get_node_type(n, &type) == DOM_NO_ERR &&
+		    type == DOM_ELEMENT_NODE) {
+			count++;
+		}
+
+		if (dom_node_get_first_child(n, &next) != DOM_NO_ERR) {
+			next = NULL;
+		}
+		if (next == NULL) {
+			/* climb until a next sibling exists, stop at root */
+			dom_node *cur = dom_node_ref(n);
+
+			while (cur != NULL) {
+				dom_node *sib = NULL, *parent = NULL;
+
+				if (cur == root) {
+					dom_node_unref(cur);
+					break;
+				}
+				if (dom_node_get_next_sibling(cur, &sib) == DOM_NO_ERR &&
+						sib != NULL) {
+					next = sib;
+					dom_node_unref(cur);
+					break;
+				}
+				if (dom_node_get_parent_node(cur, &parent) != DOM_NO_ERR) {
+					parent = NULL;
+				}
+				dom_node_unref(cur);
+				cur = parent;
+			}
+		}
+		dom_node_unref(n);
+		n = next;
+	}
+	if (n != NULL) {
+		dom_node_unref(n);
+	}
+
+	return count;
+}
+
+
+static void html_dom_dirty_cb(void *pw);
+
+
+/**
+ * Ask again in `ms`, or give up (netsurf_upy).
+ */
+static void html_dom_dirty_retry(html_content *c, int ms)
+{
+	if (c->dom_dirty_retries++ < HTML_RELAYOUT_MAX_RETRIES) {
+		guit->misc->schedule(ms, html_dom_dirty_cb, c);
+	} else {
+		NSLOG(netsurf, WARNING,
+		      "relayout given up on after %d retries (content %p)",
+		      HTML_RELAYOUT_MAX_RETRIES, c);
+		c->dom_dirty = false;
+	}
+}
+
+
+/**
+ * The coalesced rebuild a DOM mutation asked for (netsurf_upy).
+ *
+ * Scheduled by html_mark_dom_dirty() and reached through
+ * guit->misc->schedule(), so it runs on the frontend's own timer and
+ * never inside the binding that set the flag -- which matters, because
+ * html_relayout() frees the box tree and the caller of a mutating
+ * binding may be holding one.
+ */
+static void html_dom_dirty_cb(void *pw)
+{
+	html_content *c = pw;
+	dom_node *html = NULL;
+	dom_exception exc;
+	uint64_t now = 0, started = 0, ended = 0, cost, estimate;
+	unsigned elements;
+	nserror err;
+
+	if (c->dom_dirty == false) {
+		return;
+	}
+
+	if (c->aborted || c->base.status == CONTENT_STATUS_ERROR) {
+		c->dom_dirty = false;
+		return;
+	}
+
+	/*
+	 * Gate: done, and nothing in flight.  html_relayout() itself
+	 * accepts CONTENT_STATUS_READY as well, but this caller holds to
+	 * VitaSurf's narrower policy -- a rebuild while the page is still
+	 * loading would be thrown away by the conversion that follows it.
+	 */
+	if (c->base.status != CONTENT_STATUS_DONE || c->base.active != 0) {
+		html_dom_dirty_retry(c, HTML_RELAYOUT_RETRY_MS);
+		return;
+	}
+
+	/* the quiet period: a rebuild that cost 200 ms buys 800 ms of
+	 * calm, so a script that mutates continuously cannot spend the
+	 * whole machine rebuilding.  Not a retry -- the wait is known. */
+	nsu_getmonotonic_ms(&now);
+	if (now < c->relayout_quiet_until) {
+		guit->misc->schedule((int) (c->relayout_quiet_until - now),
+				     html_dom_dirty_cb, c);
+		return;
+	}
+
+	exc = dom_document_get_document_element(c->document, (void *) &html);
+	if ((exc != DOM_NO_ERR) || (html == NULL)) {
+		c->dom_dirty = false;
+		return;
+	}
+	elements = html_dom_element_count(html, HTML_RELAYOUT_MAX_ELEMENTS + 1);
+	dom_node_unref(html);
+
+	if (elements > HTML_RELAYOUT_MAX_ELEMENTS) {
+		NSLOG(netsurf, WARNING,
+		      "relayout refused: over %d elements (content %p)",
+		      HTML_RELAYOUT_MAX_ELEMENTS, c);
+		c->dom_dirty = false;
+		return;
+	}
+
+	if (c->relayout_count > 0 && c->relayout_elements > 0) {
+		estimate = (c->relayout_last_ms * elements) /
+				c->relayout_elements;
+		if (estimate > HTML_RELAYOUT_MAX_MS) {
+			NSLOG(netsurf, WARNING,
+			      "relayout refused: %u elements estimated at "
+			      "%u ms, over the %d ms budget (content %p)",
+			      elements, (unsigned) estimate,
+			      HTML_RELAYOUT_MAX_MS, c);
+			c->dom_dirty = false;
+			return;
+		}
+	}
+
+	nsu_getmonotonic_ms(&started);
+	err = html_relayout(c);
+	nsu_getmonotonic_ms(&ended);
+	cost = (ended > started) ? (ended - started) : 0;
+
+	if (err == NSERROR_INVALID) {
+		/* busy with the user, or the box tree is not in a state
+		 * this can run against: ask again */
+		html_dom_dirty_retry(c, HTML_RELAYOUT_RETRY_MS);
+		return;
+	}
+
+	c->dom_dirty = false;
+	c->dom_dirty_retries = 0;
+
+	if (err == NSERROR_NOT_IMPLEMENTED) {
+		/* nsoption enable_dynamic_relayout went off under us */
+		return;
+	}
+	if (err != NSERROR_OK) {
+		NSLOG(netsurf, WARNING, "relayout failed (content %p)", c);
+		return;
+	}
+
+	c->relayout_count++;
+	c->relayout_elements = elements;
+	c->relayout_last_ms = cost;
+	c->relayout_quiet_until = ended + cost * HTML_RELAYOUT_QUIET_FACTOR;
+
+	/* The one number this phase was asked to measure directly rather
+	 * than inherit: what a rebuild of *our* pages costs per element. */
+	NSLOG(netsurf, INFO,
+	      "relayout %u done: %u elements in %u ms, %u us/element, "
+	      "quiet for %u ms (content %p)",
+	      c->relayout_count, elements, (unsigned) cost,
+	      (unsigned) (elements ? (cost * 1000) / elements : 0),
+	      (unsigned) (cost * HTML_RELAYOUT_QUIET_FACTOR), c);
+}
+
+
+/* exported interface documented in html/private.h */
+void html_mark_dom_dirty(html_content *htmlc)
+{
+	if (htmlc == NULL) {
+		return;
+	}
+
+	if (nsoption_bool(enable_dynamic_relayout) == false) {
+		/*
+		 * netsurf_upy: with the mechanism off nothing is even
+		 * scheduled, so a build carrying this behaves exactly as
+		 * one without it -- which is what the option matrix in
+		 * RD/tests/test_netsurf_dynamic_vm.py measures.
+		 */
+		return;
+	}
+
+	if (htmlc->aborted || htmlc->base.status == CONTENT_STATUS_ERROR) {
+		return;
+	}
+
+	if (htmlc->dom_dirty == false) {
+		htmlc->dom_dirty = true;
+		htmlc->dom_dirty_retries = 0;
+	}
+
+	guit->misc->schedule(HTML_RELAYOUT_COALESCE_MS, html_dom_dirty_cb,
+			     htmlc);
+}
+
+
+/* exported interface documented in html/private.h */
+void html_mark_dom_dirty_node(dom_node *node)
+{
+	html_content *htmlc = NULL;
+	dom_document *doc = NULL;
+	dom_exception exc;
+
+	if (node == NULL) {
+		return;
+	}
+
+	exc = dom_node_get_owner_document(node, &doc);
+	if (exc != DOM_NO_ERR) {
+		return;
+	}
+
+	if (doc == NULL) {
+		/* the document node is its own content's key and has no
+		 * owner document of its own */
+		exc = dom_node_get_user_data(node,
+				corestring_dom___ns_key_html_content_data,
+				&htmlc);
+		if (exc == DOM_NO_ERR && htmlc != NULL) {
+			html_mark_dom_dirty(htmlc);
+		}
+		return;
+	}
+
+	exc = dom_node_get_user_data(doc,
+			corestring_dom___ns_key_html_content_data,
+			&htmlc);
+	dom_node_unref(doc);
+	if (exc != DOM_NO_ERR || htmlc == NULL) {
+		return;
+	}
+
+	html_mark_dom_dirty(htmlc);
+}
+
+
 /**
  * Redraw a box.
  *
@@ -1537,6 +1879,10 @@ static void html_destroy(struct content *c)
 	struct form *f, *g;
 
 	NSLOG(netsurf, INFO, "content %p", c);
+
+	/* The coalescing rebuild timer holds this content as its context
+	 * (netsurf_upy); it must not fire on a freed one. */
+	guit->misc->schedule(-1, html_dom_dirty_cb, html);
 
 	/* If we're still converting a layout, cancel it */
 	if (html->box_conversion_context != NULL) {

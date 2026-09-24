@@ -22,6 +22,13 @@
  * declared html_relayout(); html_content gained late_css_retries
  * (VitaSurf) and deferred_links (netsurf_upy).
  *
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change), a second time: declared html_mark_dom_dirty() and
+ * html_mark_dom_dirty_node(), and html_content gained the dirty flag and
+ * the rebuild-cost bookkeeping they drive (dom_dirty,
+ * dom_dirty_retries, relayout_count, relayout_elements,
+ * relayout_last_ms, relayout_quiet_until).
+ *
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
  * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
@@ -39,6 +46,8 @@
 
 #ifndef NETSURF_HTML_PRIVATE_H
 #define NETSURF_HTML_PRIVATE_H
+
+#include <stdint.h>
 
 #include <dom/bindings/hubbub/parser.h>
 
@@ -178,6 +187,25 @@ typedef struct html_content {
 	/** <link> stylesheets whose fetch was held back past conversion
 	 *  (netsurf_upy, nsoption defer_author_stylesheets) */
 	struct html_deferred_link *deferred_links;
+
+	/** The document has been mutated since the box tree was built and
+	 *  a rebuild is owed (netsurf_upy; VitaSurf's vita/js/qjs.c calls
+	 *  the same thing mark_dirty()).  Set by html_mark_dom_dirty(),
+	 *  cleared when the rebuild has run or been refused. */
+	bool dom_dirty;
+	/** retries of the rebuild a DOM mutation asks for (netsurf_upy) */
+	unsigned dom_dirty_retries;
+	/** how many rebuilds a DOM mutation has asked for and got */
+	unsigned relayout_count;
+	/** elements counted for the last rebuild, and what it cost in ms:
+	 *  together they are the per-element cost the budget estimates the
+	 *  next rebuild with (netsurf_upy) */
+	unsigned relayout_elements;
+	uint64_t relayout_last_ms;
+	/** monotonic ms before which the next rebuild may not start -- the
+	 *  quiet period, HTML_RELAYOUT_QUIET_FACTOR times the last
+	 *  rebuild's cost (netsurf_upy, VitaSurf's policy) */
+	uint64_t relayout_quiet_until;
 	/**< Style selection media specification */
 	css_media media;
 	/** CSS length conversion context for document. */
@@ -346,6 +374,35 @@ dom_hubbub_error html_process_script(void *ctx, dom_node *node);
  *         should try again later.
  */
 nserror html_relayout(html_content *htmlc);
+
+/**
+ * Note that the document has been mutated and ask for a rebuild
+ * (netsurf_upy).
+ *
+ * The policy is VitaSurf's, ported rather than copied: a dirty flag set
+ * by each mutating binding, coalesced onto one timer, gated on
+ * CONTENT_STATUS_DONE with no outstanding fetches, held off by an
+ * element and cost budget, and followed by a quiet period of about four
+ * times the last rebuild.  It is a no-op unless nsoption
+ * enable_dynamic_relayout is set.
+ *
+ * \param htmlc html content whose document has changed
+ */
+void html_mark_dom_dirty(html_content *htmlc);
+
+/**
+ * html_mark_dom_dirty() for a caller that has a node and not a content
+ * (netsurf_upy).
+ *
+ * Finds the content through the node's owner document and the
+ * __ns_key_html_content_data user data html_create_html_data() put
+ * there -- the hop CanvasRenderingContext2D.bnd::redraw_node() already
+ * makes.  Safe on a node that has no box and on one detached from the
+ * document; both still carry an owner document.
+ *
+ * \param node the node that was mutated, or whose children were
+ */
+void html_mark_dom_dirty_node(dom_node *node);
 
 /* in html/forms.c */
 struct form *html_forms_get_forms(const char *docenc, dom_html_document *doc);

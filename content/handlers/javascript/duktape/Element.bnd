@@ -8,10 +8,32 @@
  *         http://www.opensource.org/licenses/mit-license
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (a dated notice of change; this
+ * file is MIT-licensed inside a GPL-2.0 program, and the notice is kept
+ * in the same form the GPL-2.0 files in this fork carry).  The innerHTML setter and setAttribute() mark the
+ * document dirty, so that html_relayout() rebuilds the box tree from it
+ * (html_mark_dom_dirty_node()).
+ *
+ * The policy behind the flag -- coalesce, gate, budget, quiet period --
+ * is adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by
+ * Breezyslasher, whose vita/js/qjs.c calls the same thing mark_dirty().
+ * GPL-2.0, same as NetSurf.  No line of qjs.c is copied here: that file
+ * is a QuickJS engine and this is duktape's binding layer.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 class Element {
 	prologue %{
 #include <utils/corestrings.h>
 #include <dom/bindings/hubbub/parser.h>
+/* The same "smidge naughty" reach CanvasRenderingContext2D.bnd makes,
+ * and for the same reason: a mutating binding has to be able to tell the
+ * html content its document changed (netsurf_upy). */
+#include "content/handlers/html/private.h"
 %};
 };
 
@@ -327,6 +349,9 @@ method Element::setAttribute()
 	dom_string_unref(attr_str);
 	dom_string_unref(value_str);
 	if (exc != DOM_NO_ERR) return 0;
+	/* an attribute can change what a selector matches, so the box tree
+	 * is stale even though the tree of nodes is not (netsurf_upy) */
+	html_mark_dom_dirty_node(priv->parent.node);
 	return 0;
 %}
 
@@ -522,6 +547,15 @@ setter Element::innerHTML()
 		if (exc != DOM_NO_ERR) goto out;
 	}
 out:
+	/* Unconditionally, and not only on the success path: step 1 above
+	 * empties this node before anything can fail, so every way out of
+	 * here past that point leaves the document changed (netsurf_upy).
+	 * A rebuild asked for after a failed parse costs one rebuild that
+	 * renders what is already on screen; a rebuild not asked for after
+	 * a half-done one leaves the screen showing a document that is no
+	 * longer there. */
+	html_mark_dom_dirty_node(priv->parent.node);
+
 	if (parser != NULL) {
 		dom_hubbub_parser_destroy(parser);
 	}

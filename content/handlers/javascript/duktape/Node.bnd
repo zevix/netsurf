@@ -8,10 +8,32 @@
  *         http://www.opensource.org/licenses/mit-license
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (a dated notice of change; this
+ * file is MIT-licensed inside a GPL-2.0 program, and the notice is kept
+ * in the same form the GPL-2.0 files in this fork carry).  appendChild(),
+ * insertBefore(), removeChild() and the textContent setter mark the
+ * document dirty, so that html_relayout() rebuilds the box tree from it
+ * (html_mark_dom_dirty_node()).
+ *
+ * The policy behind the flag -- coalesce, gate, budget, quiet period --
+ * is adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0022-netsurf-relayout-after-script-changes.patch, by
+ * Breezyslasher, whose vita/js/qjs.c calls the same thing mark_dirty().
+ * GPL-2.0, same as NetSurf.  No line of qjs.c is copied here: that file
+ * is a QuickJS engine and this is duktape's binding layer.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 class Node {
 	private dom_node *node;
 	prologue %{
-
+/* The same "smidge naughty" reach CanvasRenderingContext2D.bnd makes,
+ * and for the same reason: a mutating binding has to be able to tell the
+ * html content its document changed (netsurf_upy). */
+#include "content/handlers/html/private.h"
 %};
 };
 
@@ -253,6 +275,10 @@ setter Node::textContent()
 	if (exc != DOM_NO_ERR) return 0;
 	exc = dom_node_set_text_content(priv->node, content);
 	dom_string_unref(content);
+	if (exc != DOM_NO_ERR) return 0;
+	/* the text boxes under this node are the ones that went
+	 * (netsurf_upy) */
+	html_mark_dom_dirty_node(priv->node);
 	return 0;
 %}
 
@@ -419,6 +445,9 @@ method Node::insertBefore()
 
 	err = dom_node_insert_before(priv->node, other->node, before, &spare);
 	if (err != DOM_NO_ERR) return 0;
+	/* mark from the parent, which is in the document whatever the
+	 * child's state is (netsurf_upy) */
+	html_mark_dom_dirty_node(priv->node);
 	dukky_push_node(ctx, spare);
 	dom_node_unref(spare);
 
@@ -439,6 +468,7 @@ method Node::appendChild()
 	NSLOG(dukky, DEEPDEBUG, "About to append %p to %p", other->node, priv->node);
 	err = dom_node_append_child(priv->node, other->node, &spare);
 	if (err != DOM_NO_ERR) return 0;
+	html_mark_dom_dirty_node(priv->node);
 	dukky_push_node(ctx, spare);
 	dom_node_unref(spare);
 
@@ -483,6 +513,9 @@ method Node::removeChild()
 
 	err = dom_node_remove_child(priv->node, other->node, &spare);
 	if (err != DOM_NO_ERR) return 0;
+	/* the removed child keeps its owner document, but the parent is
+	 * the node whose boxes went (netsurf_upy) */
+	html_mark_dom_dirty_node(priv->node);
 	dukky_push_node(ctx, spare);
 	dom_node_unref(spare);
 
