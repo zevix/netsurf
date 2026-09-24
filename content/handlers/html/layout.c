@@ -19,6 +19,17 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  layout_minmax_block() treats an HTML object whose
+ * box tree is momentarily absent as an object of unknown intrinsic
+ * width, instead of dereferencing the NULL html_get_box_tree() can now
+ * return.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  * HTML layout implementation.
@@ -940,11 +951,18 @@ static void layout_minmax_block(
 	}
 
 	if (block->object) {
+		struct box *obj_layout = NULL;
+
 		if (content_get_type(block->object) == CONTENT_HTML) {
-			layout_minmax_block(html_get_box_tree(block->object),
-					font_func, content);
-			min = html_get_box_tree(block->object)->min_width;
-			max = html_get_box_tree(block->object)->max_width;
+			/* netsurf_upy: NULL while that content rebuilds its
+			 * box tree, or after a rebuild that failed */
+			obj_layout = html_get_box_tree(block->object);
+		}
+
+		if (obj_layout != NULL) {
+			layout_minmax_block(obj_layout, font_func, content);
+			min = obj_layout->min_width;
+			max = obj_layout->max_width;
 		} else {
 			min = max = content_get_width(block->object);
 		}

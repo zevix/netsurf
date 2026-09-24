@@ -17,6 +17,16 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  save_as_text() bails when the content has no box
+ * tree, instead of handing NULL to extract_text(), whose first
+ * statement is assert(box).  html_get_box_tree() can now return NULL.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /** \file
   * Text export of HTML (implementation).
   */
@@ -62,12 +72,20 @@ void save_as_text(struct hlcache_handle *c, char *path)
 	bool first = true;
 	nserror ret;
 	char *result;
+	struct box *box;
 
 	if (!c || content_get_type(c) != CONTENT_HTML) {
 		return;
 	}
 
-	extract_text(html_get_box_tree(c), &first, &before, &save);
+	box = html_get_box_tree(c);
+	if (box == NULL) {
+		/* netsurf_upy: a rebuild is in flight, or the last one
+		 * failed; there is nothing to export */
+		return;
+	}
+
+	extract_text(box, &first, &before, &save);
 	if (!save.block)
 		return;
 

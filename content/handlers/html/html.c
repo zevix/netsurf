@@ -28,6 +28,13 @@
  * starts the stylesheet fetches nsoption defer_author_stylesheets held
  * back (netsurf_upy).
  *
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change), a second time: html_get_contextual_content(),
+ * html_scroll_at_point(), html_drop_file_at_point() and
+ * html_get_id_offset() return early when there is no box tree, the way
+ * redraw.c and interaction.c already did, and html_get_box_tree()
+ * documents that it may return NULL.
+ *
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
  * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
@@ -1688,6 +1695,16 @@ html_get_contextual_content(struct content *c, int x, int y,
 	struct box *next;
 	int box_x = 0, box_y = 0;
 
+	if (box == NULL) {
+		/* No box tree: a rebuild from a modified document is in
+		 * flight, or html_relayout_done() failed and left the
+		 * content open with none. Nothing is under the pointer, and
+		 * box_at_point() opens with assert(box) (netsurf_upy;
+		 * VitaSurf guards redraw.c and interaction.c the same way,
+		 * but not this). */
+		return NSERROR_OK;
+	}
+
 	while ((next = box_at_point(&html->unit_len_ctx, box, x, y,
 			&box_x, &box_y)) != NULL) {
 		box = next;
@@ -1769,6 +1786,12 @@ html_scroll_at_point(struct content *c, int x, int y, int scrx, int scry)
 	struct box *next;
 	int box_x = 0, box_y = 0;
 	bool handled_scroll = false;
+
+	if (box == NULL) {
+		/* No box tree to scroll; see html_get_contextual_content()
+		 * (netsurf_upy). */
+		return false;
+	}
 
 	/* TODO: invert order; visit deepest box first */
 
@@ -1919,6 +1942,12 @@ static bool html_drop_file_at_point(struct content *c, int x, int y, char *file)
 	struct box *file_box = NULL;
 	struct box *text_box = NULL;
 	int box_x = 0, box_y = 0;
+
+	if (box == NULL) {
+		/* No box tree to drop onto; see
+		 * html_get_contextual_content() (netsurf_upy). */
+		return false;
+	}
 
 	/* Scan box tree for boxes that can handle drop */
 	while ((next = box_at_point(&html->unit_len_ctx, box, x, y,
@@ -2193,7 +2222,13 @@ dom_document *html_get_document(hlcache_handle *h)
  * Retrieve box tree
  *
  * \param h  HTML content to retrieve tree from
- * \return Pointer to box tree
+ * \return Pointer to box tree, or NULL if the content has none at
+ *         present -- a rebuild is in flight, or html_relayout_done()
+ *         failed and left the content open without one (netsurf_upy).
+ *         Every caller must handle NULL; the getter deliberately does
+ *         not assert, because a transient absence of a box tree is a
+ *         state this fork can reach, and aborting on it is the failure
+ *         mode the guards elsewhere in this file exist to remove.
  *
  * \todo This API must die, as must all use of the box tree outside of
  *         HTML content handler
@@ -2309,6 +2344,10 @@ bool html_get_id_offset(hlcache_handle *h, lwc_string *frag_id, int *x, int *y)
 		return false;
 
 	layout = html_get_box_tree(h);
+	if (layout == NULL) {
+		/* no box tree, so no id has an offset (netsurf_upy) */
+		return false;
+	}
 
 	if ((pos = box_find_by_id(layout, frag_id)) != 0) {
 		box_coords(pos, x, y);
