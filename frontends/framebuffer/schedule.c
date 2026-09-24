@@ -16,6 +16,22 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  This file gained:
+ * framebuffer_schedule() adds to the back of the callback list, so
+ * callbacks that come due together run in the order they were asked
+ * for.  VitaSurf gates this on __vita__; this fork takes it ungated,
+ * the bug being nothing to do with the Vita.
+ *
+ * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
+ * patches/0026-netsurf-timer-order.patch, by Breezyslasher.
+ * GPL-2.0, same as NetSurf.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 #include <time.h>
 #include <stdlib.h>
 
@@ -117,9 +133,27 @@ nserror framebuffer_schedule(int tival, void (*callback)(void *p), void *p)
 	nscb->callback = callback;
 	nscb->p = p;
 
-        /* add to list front */
-        nscb->next = schedule_list;
-        schedule_list = nscb;
+	/*
+	 * Add to the back of the list.  The runner walks it from the
+	 * front, so adding at the front ran callbacks that came due
+	 * together in the reverse of the order they were asked for.
+	 * Schedulers depend on that order: posting three messages through
+	 * a MessageChannel delivered them third, second, first.
+	 * (VitaSurf; taken ungated -- the bug is not Vita-specific.)
+	 */
+	{
+		struct nscallback *tail = schedule_list;
+
+		nscb->next = NULL;
+		if (tail == NULL) {
+			schedule_list = nscb;
+		} else {
+			while (tail->next != NULL) {
+				tail = tail->next;
+			}
+			tail->next = nscb;
+		}
+	}
 
 	return NSERROR_OK;
 }
