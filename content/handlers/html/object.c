@@ -21,7 +21,11 @@
  * notice of change).  This file gained:
  * html_object_free_list(), which releases the object list a rebuild set
  * aside, and the two reformat paths check for a content with no box
- * tree.  The html_object_done() call in the first of those is this
+ * tree.  html_object_free_list() also carries a 2026-09-24 G2
+ * remediation: it decrements base.active only for an object whose fetch
+ * was counted there in the first place (counted_active), because
+ * html_fetch_object() counts a fetch only when the object has a box.
+ * The html_object_done() call in the first of those is this
  * tree's three-argument form, not VitaSurf's four-argument one (their
  * 0013-netsurf-mask-image.patch, which this fork does not take): the
  * only hunk of 0022 that did not apply.
@@ -579,6 +583,9 @@ static bool html_replace_object(struct content_html_object *object, nsurl *url)
 	if (error != NSERROR_OK)
 		return false;
 
+	/* netsurf_upy: asserted above to have a box, so it is counted */
+	object->counted_active = true;
+
 	for (page = c; page != NULL; page = page->page) {
 		page->base.active++;
 		NSLOG(netsurf, INFO, "%d fetches active", c->base.active);
@@ -717,7 +724,41 @@ nserror html_object_free_list(html_content *html,
 				guit->misc->schedule(-1, html_object_refresh,
 						     victim);
 			}
-			if (content_get_status(victim->content) !=
+			/*
+			 * netsurf_upy (G2 remediation), correcting the
+			 * VitaSurf original, which tested only the status.
+			 *
+			 * html_fetch_object() does `base.active++` only for
+			 * an object that has a box; a box-less speculative
+			 * image fetch (dom_event.c::
+			 * html_process_inserted_img()) is never counted, and
+			 * html_object_nobox_callback() never decrements, so
+			 * such an object sits in the list not-DONE for its
+			 * whole life.  The sole caller of this function
+			 * reaches it only with base.active == 0
+			 * (css.c::html_css_late_rebuild() returns early
+			 * otherwise), and by the time it runs
+			 * dom_to_box_sync() has already counted the *new*
+			 * tree's fetches -- so a decrement for an uncounted
+			 * old object lands on a live one and
+			 * html_proceed_to_done() fires early.  Not a crash;
+			 * a page with a still-loading speculative image
+			 * completes before its images do.
+			 *
+			 * counted_active answers exactly the question the
+			 * status was standing in for, and it keeps this
+			 * correct for a future caller that does not gate on
+			 * base.active == 0 -- where a genuinely in-flight
+			 * boxed object *does* need the decrement, because
+			 * releasing its handle means its CONTENT_MSG_DONE
+			 * will never arrive.  This mirrors the `object->box
+			 * != NULL` test html_object_close_objects() already
+			 * makes, without reading victim->box, which is a
+			 * dangling pointer by now: html_relayout() frees the
+			 * old bctx before it calls this.
+			 */
+			if (victim->counted_active &&
+			    content_get_status(victim->content) !=
 					CONTENT_STATUS_DONE &&
 			    html->base.active > 0) {
 				/* no callback will arrive for it now */
@@ -813,6 +854,8 @@ html_fetch_object(html_content *c,
 	c->num_objects++;
 	if (box != NULL) {
 		c->base.active++;
+		/* netsurf_upy: remember that this one was counted */
+		object->counted_active = true;
 		NSLOG(netsurf, INFO, "%d fetches active", c->base.active);
 	}
 

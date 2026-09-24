@@ -16,6 +16,17 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-24 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  struct content_html_object gained
+ * counted_active, which records whether this object's fetch was ever
+ * counted in the parent's base.active, so that a release can decrement
+ * exactly what it incremented.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  * Interface to text/html content handler.
@@ -99,6 +110,16 @@ struct content_html_object {
 	/** Bitmap of acceptable content types */
 	content_type permitted_types;
 	bool background;  /**< This object is a background image. */
+	/**
+	 * Whether this object's fetch was counted in the parent's
+	 * base.active (netsurf_upy).  html_fetch_object() counts a fetch
+	 * only when the object has a box; a speculative, box-less fetch
+	 * (dom_event.c::html_process_inserted_img()) is not counted and
+	 * html_object_nobox_callback() never decrements.  Anything that
+	 * releases an object must therefore decrement only what was
+	 * counted -- see html_object_free_list().
+	 */
+	bool counted_active;
 };
 
 
