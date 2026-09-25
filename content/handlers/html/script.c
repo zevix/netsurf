@@ -16,6 +16,35 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-25 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change).  `select_script_handler()` is given the script's
+ * MIME *string* as well as its content type, and dispatches
+ * `text/x-upy` to `js_exec_upy()` -- the second engine slot of
+ * `javascript/engine.c`.
+ *
+ * The string was already here and had no reader.  An unrecognised
+ * `type` attribute is silently ignored by stock NetSurf, but the
+ * script's text is still parsed into the DOM and kept on the content
+ * as `c->scripts[i].data.string`, with the verbatim attribute in
+ * `c->scripts[i].mimetype` -- written in `html_process_new_script()`,
+ * freed in `html_script_free()`, read nowhere.  This gives it its
+ * first reader, which is cheaper than a new `content_type` bit:
+ * `CONTENT_ANY` is 0x7f, seven bits, all of them used.
+ *
+ * **`language="upy"` is refused, and that is a decision** (A-3).
+ * NetSurf reads no `language` attribute anywhere -- there is no
+ * `corestring_dom_language` -- so `<script language="upy">` carries no
+ * `type`, `html_process_script()` defaults it to `text/javascript`,
+ * and the JavaScript engine is handed MicroPython source.  It does not
+ * fail quietly; it feeds the wrong interpreter.  The safe spelling is
+ * the `type` attribute, which is also what `netsurf-lua`'s
+ * `<script type="text/lua">` uses.
+ *
+ * The fork and the rest of its changes: netsurf_upy/ in the ubitron
+ * repository; see netsurf_upy/README.md.
+ */
+
 /**
  * \file
  * implementation of content handling for text/html scripts.
@@ -35,6 +64,7 @@
 #include "utils/messages.h"
 #include "netsurf/content.h"
 #include "javascript/js.h"
+#include "javascript/engine.h"
 #include "content/content_protected.h"
 #include "content/content_factory.h"
 #include "content/fetch.h"
@@ -46,10 +76,72 @@
 typedef bool (script_handler_t)(struct jsthread *jsthread, const uint8_t *data, size_t size, const char *name);
 
 
-static script_handler_t *select_script_handler(content_type ctype)
+/**
+ * The MIME type of a `text/x-upy` script, and nothing else (netsurf_upy).
+ *
+ * Exact, case-insensitively, after leading and trailing whitespace:
+ * `type="text/x-upy"` and `type=" TEXT/X-UPY "` are the same script and
+ * `type="text/x-upy; charset=utf-8"` is not one.  A MIME type is
+ * case-insensitive (RFC 2045 section 5.1) and the HTML parser hands the
+ * attribute over verbatim, whitespace and all.  Being strict about
+ * parameters is deliberate: an engine that guesses is an engine that
+ * runs the wrong thing.
+ */
+static const char *const UPY_MIMETYPE = "text/x-upy";
+
+static bool mimetype_is_upy(dom_string *mimetype)
+{
+	const char *data;
+	size_t len, start, end, i;
+
+	if (mimetype == NULL) {
+		return false;
+	}
+
+	data = dom_string_data(mimetype);
+	len = dom_string_byte_length(mimetype);
+
+	for (start = 0; start < len && isspace((unsigned char) data[start]);
+	     start++) {
+		/* leading whitespace */
+	}
+	for (end = len; end > start && isspace((unsigned char) data[end - 1]);
+	     end--) {
+		/* trailing whitespace */
+	}
+
+	if (end - start != strlen(UPY_MIMETYPE)) {
+		return false;
+	}
+
+	for (i = 0; i < end - start; i++) {
+		if (tolower((unsigned char) data[start + i]) !=
+				UPY_MIMETYPE[i]) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/**
+ * Which engine runs this script, if any.
+ *
+ * `ctype` is the script's content type -- `CONTENT_JS` for every MIME
+ * `javascript_init()` registered -- and `mimetype` is the verbatim
+ * `type` attribute, or NULL where there is not one to consult.
+ *
+ * > **Changed 2026-09-25 (netsurf_upy G5).**  The whole body used to be
+ * > `if (ctype == CONTENT_JS) return js_exec; return NULL;`.
+ */
+static script_handler_t *select_script_handler(content_type ctype,
+					       dom_string *mimetype)
 {
 	if (ctype == CONTENT_JS) {
 		return js_exec;
+	}
+	if (ns_upy_script_engine() != NULL && mimetype_is_upy(mimetype)) {
+		return js_exec_upy;
 	}
 	return NULL;
 }
@@ -84,8 +176,18 @@ nserror html_script_exec(html_content *c, bool allow_defer)
 				continue;
 
 			/* ensure script handler for content type */
+			/* NULL, not `s->mimetype`: for a `src=` script
+			 * the `type` attribute is not consulted at all
+			 * -- the decision is the response's MIME, and
+			 * `hlcache_type_is_acceptable()` has already
+			 * refused anything outside the accepted mask.
+			 * An external `text/x-upy` script is a
+			 * follow-on, and it is a fetch-side change
+			 * rather than a dispatch-side one
+			 * (netsurf_upy G5). */
 			script_handler = select_script_handler(
-					content_get_type(s->data.handle));
+					content_get_type(s->data.handle),
+					NULL);
 			if (script_handler == NULL)
 				continue; /* unsupported type */
 
@@ -317,7 +419,11 @@ convert_script_sync_cb(hlcache_handle *script,
 		s->already_started = true;
 
 		/* attempt to execute script */
-		script_handler = select_script_handler(content_get_type(s->data.handle));
+		/* NULL for the same reason as in html_script_exec():
+		 * a `src=` script's type comes from the response
+		 * (netsurf_upy G5). */
+		script_handler = select_script_handler(
+				content_get_type(s->data.handle), NULL);
 		if (script_handler != NULL && parent->jsthread != NULL) {
 			/* script has a handler */
 			const uint8_t *data;
@@ -544,7 +650,9 @@ exec_inline_script(html_content *c, dom_node *node, dom_string *mimetype)
 		return DOM_HUBBUB_DOM;
 	}
 
-	script_handler = select_script_handler(content_factory_type_from_mime_type(lwcmimetype));
+	script_handler = select_script_handler(
+			content_factory_type_from_mime_type(lwcmimetype),
+			mimetype);
 	lwc_string_unref(lwcmimetype);
 
 	if (script_handler != NULL) {

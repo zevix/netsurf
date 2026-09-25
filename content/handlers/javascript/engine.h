@@ -44,13 +44,28 @@
  * `struct ns_script_core_v1` (`javascript/core.h`), which the browser
  * passes in.  It is deliberately opaque here: a plugin needs the full
  * declaration, the browser's other 400-odd translation units do not.
+ *
+ * Changed 2026-09-25 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change), a second time (G5).  **The vtable is unchanged --
+ * the same eleven functions, the same ABI token.**  What is new is that
+ * a browser can hold *two* engines at once: the one that answers for
+ * `text/javascript` and a second, named by `script_engine_upy_path`,
+ * that answers for `text/x-upy` and for nothing else.  Both are the
+ * same `struct ns_script_engine_v1`, loaded by the same loader and
+ * refused by the same checks; `js_exec_upy()` below is the only new
+ * entry point, and `html/script.c::select_script_handler()` is its one
+ * caller.  A plugin cannot tell which slot it was loaded into, which is
+ * what keeps this a change to the *browser* and not to the seam.
  */
 
 #ifndef NETSURF_JAVASCRIPT_ENGINE_H_
 #define NETSURF_JAVASCRIPT_ENGINE_H_
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include "javascript/js.h"
 
 /**
  * The ABI token of the table below.
@@ -144,5 +159,35 @@ const struct ns_script_engine_v1 *ns_builtin_script_engine(void);
  * which.  Never NULL after `js_initialise()`.
  */
 const struct ns_script_engine_v1 *ns_active_script_engine(void);
+
+/**
+ * The engine `text/x-upy` scripts are run by, or NULL (netsurf_upy G5).
+ *
+ * Loaded from `script_engine_upy_path` by the same `engine_load()` that
+ * loads `script_engine_path`, and refused by the same checks.  NULL
+ * means the option was unset or the plugin was refused; a `text/x-upy`
+ * script is then not executed at all, which is exactly what stock
+ * NetSurf does with any script type it does not know.
+ */
+const struct ns_script_engine_v1 *ns_upy_script_engine(void);
+
+/**
+ * Run a `text/x-upy` script (netsurf_upy G5).
+ *
+ * Same signature as `js_exec()`, because `html/script.c` picks between
+ * the two by MIME type and calls whichever it picked through one
+ * `script_handler_t *`.  `thread` is the browser's own `jsthread *` --
+ * the router's, not an engine's -- and the upy engine's heap and thread
+ * are created inside it, lazily, the first time a page actually carries
+ * a upy script.  A page that carries none pays nothing.
+ *
+ * \param thread the content's jsthread
+ * \param txt the script source
+ * \param txtlen its length in bytes
+ * \param name what to call it in a message
+ * \return true if the engine ran it
+ */
+bool js_exec_upy(jsthread *thread, const uint8_t *txt, size_t txtlen,
+		 const char *name);
 
 #endif /* NETSURF_JAVASCRIPT_ENGINE_H_ */

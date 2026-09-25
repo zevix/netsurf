@@ -62,6 +62,12 @@
  * says why scaling a per-element figure that is mostly fixed cost errs
  * high, which is the right way for a ceiling to err.
  *
+ * Changed 2026-09-25 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change), a seventh time (G5): html_content_get_document(),
+ * the one hop a loaded script engine takes from the html content it is
+ * handed to the document it must resolve ids in.  No line of it is
+ * adapted from VitaSurf.
+ *
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
  * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
@@ -2691,6 +2697,16 @@ dom_document *html_get_document(hlcache_handle *h)
 	assert(c != NULL);
 
 	return c->document;
+}
+
+/* exported internal interface documented in html/private.h */
+dom_document *html_content_get_document(html_content *htmlc)
+{
+	if (htmlc == NULL) {
+		return NULL;
+	}
+
+	return htmlc->document;
 }
 
 /**

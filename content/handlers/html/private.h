@@ -29,6 +29,13 @@
  * dom_dirty_retries, relayout_count, relayout_elements,
  * relayout_last_ms, relayout_quiet_until).
  *
+ * Changed 2026-09-25 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change), a third time: declared
+ * html_content_get_document(), the accessor a loaded script engine
+ * reaches an html_content's document through.  A plugin is a separate
+ * build and may not dereference an html_content -- see
+ * javascript/core.def, where this is the 587th name.
+ *
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
  * patches/0022-netsurf-relayout-after-script-changes.patch, by Breezyslasher.
  * Adapted from VitaSurf <https://github.com/Breezyslasher/VitaSurf>,
@@ -403,6 +410,22 @@ void html_mark_dom_dirty(html_content *htmlc);
  * \param node the node that was mutated, or whose children were
  */
 void html_mark_dom_dirty_node(dom_node *node);
+
+/**
+ * The document of an html content, for a caller that holds the content
+ * as an opaque pointer (netsurf_upy).
+ *
+ * `html_get_document()` takes an `hlcache_handle`; a script engine is
+ * given the html content itself, as `doc_priv` of js_newthread(), and a
+ * *loaded* engine is a separate build that must not dereference the
+ * struct (R3.4: no NetSurf type layout crosses the plugin boundary).
+ * This is the one hop it needs, and it is in javascript/core.def so the
+ * plugin reaches it through the callback table like everything else.
+ *
+ * \param htmlc html content, or NULL
+ * \return the content's document, or NULL
+ */
+dom_document *html_content_get_document(html_content *htmlc);
 
 /* in html/forms.c */
 struct form *html_forms_get_forms(const char *docenc, dom_html_document *doc);

@@ -46,6 +46,22 @@
  * enforces it: the plugin is linked `-Wl,--no-undefined`, so a symbol
  * missing from this list is a link failure naming it, never a silent
  * lazy binding.
+ *
+ * Changed 2026-09-25 for netsurf_upy (GPLv2 section 2(a), a dated
+ * notice of change), a second time (G5).  **The list is 588 names, not
+ * 586**, and the one added is not duktape's: an engine that is not
+ * duktape needs the document of the html content it is handed, and
+ * `html_get_document()` takes an `hlcache_handle` no engine has.
+ * `html_content_get_document()` is that hop, and adding a name here is
+ * the designed way to widen the table -- the alternative, dereferencing
+ * `html_content` inside a separately-built `.so`, is exactly what R3.4
+ * forbids.  The other is `dom_string_byte_length()`: duktape never
+ * needed it because `dukky` hands strings to duktape, while this engine
+ * copies them into a caller's `char[]` and a `dom_string` is not
+ * NUL-terminated.  `test_netsurf_build.py::
+ * test_the_core_table_is_a_pointer_per_name_of_the_right_kind` carries
+ * the counts and is re-measured here: FN 485 -> **487**, DATA 98,
+ * RAW 3.
  */
 
 /* --- functions ------------------------------------------------------ */
@@ -504,6 +520,7 @@ NS_CORE_FN(dom_namednodemap_unref)
 NS_CORE_FN(dom_nodelist_get_length)
 NS_CORE_FN(dom_nodelist_ref)
 NS_CORE_FN(dom_nodelist_unref)
+NS_CORE_FN(dom_string_byte_length)
 NS_CORE_FN(dom_string_concat)
 NS_CORE_FN(dom_string_create)
 NS_CORE_FN(dom_string_create_interned)
@@ -522,6 +539,7 @@ NS_CORE_FN(dom_tokenlist_remove)
 NS_CORE_FN(dom_tokenlist_set_value)
 NS_CORE_FN(dom_tokenlist_unref)
 NS_CORE_FN(html__redraw_a_box)
+NS_CORE_FN(html_content_get_document)
 NS_CORE_FN(html_mark_dom_dirty)
 NS_CORE_FN(html_mark_dom_dirty_node)
 NS_CORE_FN(llcache_handle_get_url)

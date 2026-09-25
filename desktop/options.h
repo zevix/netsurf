@@ -28,6 +28,10 @@
  * names a shared object to take the script engine from at run time
  * instead of the one the build chose.
  *
+ * Changed again 2026-09-25 (netsurf_upy), a second time (G5):
+ * script_engine_upy_path, the second engine slot -- the plugin that
+ * runs `text/x-upy` scripts.
+ *
  * The fork and the rest of its changes: netsurf_upy/ in the ubitron
  * repository; see netsurf_upy/README.md.
  */
@@ -178,6 +182,23 @@ NSOPTION_INTEGER(script_timeout, 10)
  * engine keeps running.
  */
 NSOPTION_STRING(script_engine_path, NULL)
+
+/**
+ * A shared object to run `text/x-upy` scripts with (netsurf_upy).
+ *
+ * The same `struct ns_script_engine_v1` as `script_engine_path`, in a
+ * second slot: a plugin named here answers for `<script
+ * type="text/x-upy">` and for nothing else, while JavaScript keeps
+ * going to whichever engine `script_engine_path` or the build chose.
+ * Unset -- the default -- and a `text/x-upy` script is not executed,
+ * which is what NetSurf does with every script type it does not know.
+ *
+ * `language="upy"` is **not** a spelling of this and never runs here:
+ * NetSurf reads no `language` attribute, so such a script has no
+ * `type`, defaults to `text/javascript` and is handed to the
+ * JavaScript engine (`html/script.c::html_process_script()`).
+ */
+NSOPTION_STRING(script_engine_upy_path, NULL)
 
 /** How many days to retain URL data for */
 NSOPTION_INTEGER(expire_url, 28)
