@@ -17,6 +17,14 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+/*
+ * Changed 2026-09-26 for netsurf_upy (GPLv2 section 2(a), a dated notice of
+ * change): dom_default_action_DOMSubtreeModified_cb() now marks the document
+ * dirty for an element it has no special case for, once the content is
+ * done, so every reflected-attribute setter nsgenbind writes with no body
+ * (which never calls html_mark_dom_dirty() itself) repaints.
+ */
+
 /**
  * \file
  * Implementation of HTML content DOM event handling.
@@ -737,9 +745,34 @@ dom_default_action_DOMSubtreeModified_cb(struct dom_event *evt, void *pw)
 				break;
 			case DOM_HTML_ELEMENT_TYPE_TEXTAREA:
 			case DOM_HTML_ELEMENT_TYPE_INPUT:
+				/*
+				 * netsurf_upy: these two must not fall into
+				 * default.  NetSurf's own form code writes the
+				 * same libdom setters on every keystroke and
+				 * checkbox or radio click, and a rebuild of the
+				 * box tree under a focused gadget per key is
+				 * the regression this guards against.
+				 */
 				html_texty_element_update(htmlc, (dom_node *)node);
-				fallthrough;
+				break;
 			default:
+				/*
+				 * netsurf_upy: every other element.  The
+				 * reflected setters nsgenbind writes without
+				 * a body change the DOM and reach here as
+				 * DOMSubtreeModified, and nothing marked the
+				 * document, so a script's td.bgColor = ...
+				 * repainted nothing.  Not before the content
+				 * is done: the parser builds the tree with the
+				 * same libdom calls, and marking then would
+				 * cost one extra rebuild per page load.
+				 * html_mark_dom_dirty() coalesces, so an
+				 * already-marking binding in the same handler
+				 * still costs one rebuild.
+				 */
+				if (htmlc->base.status == CONTENT_STATUS_DONE) {
+					html_mark_dom_dirty(htmlc);
+				}
 				break;
 			}
 		}
